@@ -52,7 +52,7 @@ def crop_patient_volumes(struct_dict, slice_axis=2, slice_range=None):
     image = struct_dict["Image"][0]
     if "GTVp" in struct_dict:
         gtvp = struct_dict["GTVp"][0]
-        slc = sp.ndimage.find_objects(gtvp.astype(bool))[0]
+        slc = sp.ndimage.find_objects(gtvp.astype(int))[0]
         start, end = slc[slice_axis].start, slc[slice_axis].stop - 1
     elif slice_range is not None:
         start, end = slice_range
@@ -61,7 +61,7 @@ def crop_patient_volumes(struct_dict, slice_axis=2, slice_range=None):
 
     if "Mandible" in struct_dict:
         mandible = struct_dict["Mandible"][0]
-        mandible_slices = sp.ndimage.find_objects(mandible.astype(bool))
+        mandible_slices = sp.ndimage.find_objects(mandible.astype(int))
         if mandible_slices:
             mandible_slice = mandible_slices[0][slice_axis]
             mandible_start = mandible_slice.start
