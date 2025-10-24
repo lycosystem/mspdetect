@@ -5,7 +5,9 @@ import time
 from typing import Any
 
 import numpy as np
+import tqdm
 import yaml
+from loguru import logger
 
 from mspdetect import io, msp_widget, optimization, preprocessing, visualization
 
@@ -23,7 +25,9 @@ def _get_patient_folders(base_path: str, patient: str | None) -> list[str]:
 
 
 def _display_full_anatomy(
-    struct_dict: dict, voxel_size: np.ndarray, HU_range: list[int],
+    struct_dict: dict,
+    voxel_size: np.ndarray,
+    HU_range: list[int],
 ) -> None:
     """Display full anatomy for verification."""
     image_orig = struct_dict["Image"][0]
@@ -169,7 +173,7 @@ def process_single_patient(
     )
 
     if struct_dict is None:
-        print(f"No matching files found in {folder_path}. Skipping...")
+        logger.warning(f"No matching files found in {folder_path}. Skipping...")
         return None
 
     voxel_size = struct_dict["Image"][1]
@@ -235,8 +239,8 @@ def run_msp_pipeline(
     # Get patient folders
     folders = _get_patient_folders(base_path, patient)
 
-    for folder in folders:
-        print(f"Processing patient: {folder}")
+    for folder in tqdm(folders, desc="Processing CTs"):
+        logger.info(f"Processing patient: {folder}")
 
         patient_results = process_single_patient(
             folder_path=os.path.join(base_path, folder),
@@ -259,9 +263,11 @@ def run_msp_pipeline(
     # Save batch results
     if patient is None:
         _save_batch_results(output_path, results)
-        print(
+        logger.info(
             f"Pipeline completed for {len(folders)} patients in {duration:.2f} seconds.",
         )
 
     else:
-        print(f"Pipeline completed for patient {patient} in {duration:.2f} seconds.")
+        logger.info(
+            f"Pipeline completed for patient {patient} in {duration:.2f} seconds.",
+        )

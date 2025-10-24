@@ -22,6 +22,8 @@ dependencies = [
     "joblib",
     "ipywidgets",
     "ipympl",
+    "loguru",
+    "tqdm",
 ]
 dynamic = ["version"]
 

@@ -6,8 +6,13 @@ import time
 
 import numpy as np
 import scipy as sp
+from loguru import logger
 
 from mspdetect import geometry, visualization
+from mspdetect.losses import (
+    huber_loss,
+    quadratic_loss,
+)
 
 
 def compute_signed_distances(params_array, image, voxel_size):
@@ -55,145 +60,6 @@ def compute_signed_distances(params_array, image, voxel_size):
     d = indices_coord_syst_phy.dot(n) - L
 
     return d, n, indices_coord_syst_phy, indices_image
-
-
-def quadratic_loss_function(diff):
-    """Compute the quadratic loss for an array of differences.
-
-    Parameters
-    ----------
-    diff : np.ndarray
-        Array of differences.
-
-    Returns
-    -------
-    np.ndarray
-        Quadratic loss values for each element in diff.
-
-    """
-    return 0.5 * diff**2
-
-
-def huber_loss_function(diff, delta=300):
-    """Compute the Huber loss for an array of differences.
-
-    Parameters
-    ----------
-    diff : np.ndarray
-        Array of differences.
-    delta : float, optional
-        Huber loss delta parameter.
-
-    Returns
-    -------
-    np.ndarray
-        Huber loss values for each element in diff.
-
-    """
-    h_loss = np.where(
-        np.abs(diff) <= delta,
-        0.5 * diff**2,
-        delta * (np.abs(diff) - 0.5 * delta),
-    )
-    return h_loss
-
-
-def p_huber_loss(r, c=300.0, p=1.4):
-    """Generalised Huber with polynomial tail."""
-    a = np.abs(r)
-    quad_mask = a <= c
-    loss = np.empty_like(r, dtype=float)
-
-    # quadratic core
-    loss[quad_mask] = 0.5 * r[quad_mask] ** 2
-
-    # tail: (2 c^{2-p} / (2-p)) |r|^p  - c^2 / (2-p)
-    coeff = 2 * c ** (2 - p) / (2 - p)
-    tail = coeff * (a[~quad_mask] ** p) - c**2 / (2 - p)
-    loss[~quad_mask] = tail
-    return loss
-
-
-def welsch_loss(r, c=200):
-    """ρc(r) for Welsch."""
-    factor = (r / c) ** 2
-    return 0.5 * c**2 * (1.0 - np.exp(-factor))
-
-
-def piecewise_loss(r):
-    """Custom piecewise loss function:
-    - Quadratic for |r| <= 200
-    - Linear for 200 < |r| < 1500
-    - Quadratic for |r| >= 1500
-    Supports scalar or NumPy array input.
-
-    Parameters
-    ----------
-    r : float or np.ndarray
-        Residual value(s)
-
-    Returns
-    -------
-    loss : float or np.ndarray
-        Computed loss value(s)
-
-    """
-    r = np.asarray(r)
-    abs_r = np.abs(r)
-
-    loss = np.where(
-        abs_r <= 200,
-        r**2,
-        np.where(
-            abs_r < 1500,
-            1700 * abs_r - 300_000,
-            r**2,
-        ),
-    )
-
-    return loss
-
-
-def piecewise_intensity_loss(I_orig, I_m, threshold=2800):
-    """Compute a continuous piecewise loss between original and mirrored intensities.
-
-    For each voxel:
-      - If I_m < threshold, loss = 0.5 * (I_orig - I_m)^2
-      - Else, loss = 0.1 * (I_orig - I_m) + offset, chosen so that loss is continuous at I_m = threshold.
-
-    Parameters
-    ----------
-    I_orig : array-like
-        Original intensities.
-    I_m : array-like
-        Mirrored/interpolated intensities.
-    threshold : float, optional
-        Intensity threshold for switching between squared and linear loss.
-
-    Returns
-    -------
-    loss : np.ndarray
-        Array of the same shape as inputs, containing the piecewise continuous loss.
-
-    """
-    I_orig = np.asarray(I_orig)
-    I_m = np.asarray(I_m)
-    diff = I_orig - I_m
-
-    # Compute diff at the threshold boundary for each voxel
-    diff_thresh = I_orig - threshold
-
-    # Squared part below threshold
-    loss_sq = 0.5 * diff**2
-
-    # Linear part above threshold, with offset for continuity
-    a = 0.1
-    offset = 0.5 * diff_thresh**2 - a * diff_thresh
-    loss_lin = a * diff + offset
-
-    # Combine piecewise
-    loss = np.where(I_m < threshold, loss_sq, loss_lin)
-    return loss
 
 
 def compute_delta(diff, dim, tol=1e-6, max_iter=100):
@@ -268,7 +134,7 @@ def compute_objective(params_array, bone, interpolator_intensity, voxel_size, de
     # dim = params_array.size
     # delta_adapt = compute_delta(diff, dim)
 
-    f = np.sum(huber_loss_function(diff, delta=delta)).mean()
+    f = np.sum(huber_loss(diff, delta=delta)).mean()
 
     # f = np.sum(welsch_loss(diff, c=delta)).mean()  # Using Welsch loss instead of Huber
     # f = np.sum(p_huber_loss(diff, c=delta, p=1)).mean()  # Using generalized Huber loss
@@ -323,7 +189,7 @@ def compute_objective_initialization(
 
     # visualization.plot_shifted_residuals_hist(diff, delta)
 
-    f = np.sum(quadratic_loss_function(diff)).mean()
+    f = np.sum(quadratic_loss(diff)).mean()
 
     return f, delta
 
@@ -372,7 +238,7 @@ def parameter_initialization(
 
     # 3) If not already computed, run grid search
     if not (os.path.exists(mse_file) and os.path.exists(params_file)):
-        print("Starting parameter initialization...")
+        logger.info("Starting parameter initialization...")
 
         # Create grid of angles
         theta_grid, phi_grid = np.meshgrid(
@@ -415,8 +281,8 @@ def parameter_initialization(
         best_idx = np.argmin(mse_array)
         best_f = mse_array[best_idx]
         best_delta = delta_array[best_idx]
-        print(f"Minimum objective f = {best_f:.4f} at index {best_idx}")
-        print(f"Corresponding δ = {best_delta:.4f}")
+        logger.info(f"Minimum objective f = {best_f:.4f} at index {best_idx}")
+        logger.info(f"Corresponding δ = {best_delta:.4f}")
 
         # Save for reuse
         np.save(mse_file, mse_array)
@@ -424,7 +290,7 @@ def parameter_initialization(
         np.save(delta_file, delta_array)
 
         end = time.time()
-        print(f"Time taken for initialization: {end - start:.2f} s")
+        logger.info(f"Time taken for initialization: {end - start:.2f} s")
 
     else:
         mse_array = np.load(mse_file)  # shape (N*N,)
@@ -462,7 +328,7 @@ def parameter_initialization(
         ),
         output_path=output_path,
     )
-    print(
+    logger.info(
         f"Best estimate of initial plane parameters: θ = {np.rad2deg(best_params[0]):.2f}°, φ = {np.rad2deg(best_params[1]):.2f}°, L = {best_params[2]:.2f}",
     )
 
@@ -684,7 +550,7 @@ def robustness_test(
 
     if results_exist and not force_regenerate:
         try:
-            print("Checking for existing robustness test results...")
+            logger.info("Checking for existing robustness test results...")
 
             # Load existing metadata to check if parameters match
             import json
@@ -717,14 +583,14 @@ def robustness_test(
             )
 
             if params_match:
-                print("✓ Found existing results with matching parameters!")
-                print(
+                logger.info("✓ Found existing results with matching parameters!")
+                logger.info(
                     f"  - Results from: {existing_metadata.get('timestamp', 'unknown time')}",
                 )
-                print(
+                logger.info(
                     f"  - Grid shape: {existing_metadata.get('grid_shape', 'unknown')}",
                 )
-                print(
+                logger.info(
                     f"  - Total optimizations: {existing_metadata.get('total_optimizations', 'unknown')}",
                 )
 
@@ -734,7 +600,7 @@ def robustness_test(
                 # Check if optimal_plane_params match (allowing for small numerical differences)
                 existing_optimal = data["optimal_plane_params"]
                 if np.allclose(existing_optimal, optimal_plane_params, atol=1e-6):
-                    print("✓ Optimal plane parameters match existing results")
+                    logger.info("✓ Optimal plane parameters match existing results")
 
                     # Reconstruct results dictionary
                     optimization_results = []
@@ -785,11 +651,13 @@ def robustness_test(
                         "parameters": existing_metadata["parameters"],
                     }
 
-                    print("✓ Successfully loaded existing results!")
-                    print(
+                    logger.info("✓ Successfully loaded existing results!")
+                    logger.info(
                         f"  - Success rate: {results['statistics']['success_rate']:.1%}",
                     )
-                    print(f"  - Mean error: {results['statistics']['mean_error']:.4f}")
+                    logger.info(
+                        f"  - Mean error: {results['statistics']['mean_error']:.4f}",
+                    )
 
                     # Compute and print zero error percentage (compute if not available in saved results)
                     if "zero_error_percentage" in results["statistics"]:
@@ -799,7 +667,7 @@ def robustness_test(
                             "total_optimizations",
                             "unknown",
                         )
-                        print(
+                        logger.info(
                             f"  - Near-zero error samples: {zero_count}/{total_samples} ({zero_pct:.1f}%)",
                         )
                     else:
@@ -819,12 +687,12 @@ def robustness_test(
                             zero_error_percentage
                         )
 
-                        print(
+                        logger.info(
                             f"  - Near-zero error samples: {zero_error_count}/{total_samples} ({zero_error_percentage:.1f}%) [computed from loaded data]",
                         )
 
                     # Generate heatmap from loaded results
-                    print("Generating heatmap from existing results...")
+                    logger.info("Generating heatmap from existing results...")
                     visualization.plot_robustness_heatmap(
                         azimuthal_angles=results["azimuthal_angles"],
                         polar_angles=results["polar_angles"],
@@ -835,23 +703,25 @@ def robustness_test(
 
                     return results
 
-                print("⚠ Optimal plane parameters don't match existing results")
-                print("  Regenerating with new optimal parameters...")
+                logger.warning(
+                    "⚠ Optimal plane parameters don't match existing results",
+                )
+                logger.info("  Regenerating with new optimal parameters...")
 
             else:
-                print("⚠ Parameters don't match existing results")
-                print(f"  Current: {current_params}")
-                print(f"  Existing: {existing_params}")
-                print("  Regenerating with new parameters...")
+                logger.warning("⚠ Parameters don't match existing results")
+                logger.info(f"  Current: {current_params}")
+                logger.info(f"  Existing: {existing_params}")
+                logger.info("  Regenerating with new parameters...")
 
         except Exception as e:
-            print(f"⚠ Error loading existing results: {e}")
-            print("  Regenerating results...")
+            logger.warning(f"⚠ Error loading existing results: {e}")
+            logger.info("  Regenerating results...")
 
     elif force_regenerate:
-        print("🔄 Force regeneration requested - computing new results...")
+        logger.info("🔄 Force regeneration requested - computing new results...")
     else:
-        print("📊 No existing results found - computing new results...")
+        logger.info("📊 No existing results found - computing new results...")
 
     # Generate new results (original computation logic)
     com_vox = sp.ndimage.center_of_mass(bone)  # in voxel indices (z, y, x)
@@ -902,8 +772,8 @@ def robustness_test(
     phi_range = 2 * pol_half_rad
     L_range = np.max(L_grid) - np.min(L_grid)
 
-    print(f"Starting robustness test with {len(planes)} initialization points...")
-    print(
+    logger.info(f"Starting robustness test with {len(planes)} initialization points...")
+    logger.info(
         f"Angular ranges: θ ∈ [{np.rad2deg(az_cent_rad - az_half_rad):.1f}°, {np.rad2deg(az_cent_rad + az_half_rad):.1f}°], "
         f"φ ∈ [{np.rad2deg(pol_cent_rad - pol_half_rad):.1f}°, {np.rad2deg(pol_cent_rad + pol_half_rad):.1f}°]",
     )
@@ -913,7 +783,7 @@ def robustness_test(
         multiprocessing.cpu_count(),
         len(planes),
     )  # Don't use more processes than initialization points
-    print(f"Using {n_processes} parallel processes for optimization...")
+    logger.info(f"Using {n_processes} parallel processes for optimization...")
 
     # Prepare arguments for multiprocessing
     task_args = []
@@ -941,7 +811,7 @@ def robustness_test(
 
     # Extract error metrics and print results
     error_metrics = []
-    print("\nOptimization Results:")
+    logger.info("\nOptimization Results:")
     for result in optimization_results:
         error_metrics.append(result["error_metric"])
 
@@ -950,21 +820,21 @@ def robustness_test(
         initial_p = result["initial_params"]
         success = result["success"]
 
-        print(
+        logger.info(
             f"Init {idx + 1}/{len(planes)}: θ={np.rad2deg(initial_p[0]):.1f}°, φ={np.rad2deg(initial_p[1]):.1f}°, "
             f"L={initial_p[2]:.2f}, Obj={result['initial_objective']:.2e}, Delta={result['delta']:.2e}",
         )
 
         if success and result["optimized_params"] is not None:
             opt_p = result["optimized_params"]
-            print(
+            logger.info(
                 f"Optimized {idx + 1}/{len(planes)}: θ={np.rad2deg(opt_p[0]):.1f}°, "
                 f"φ={np.rad2deg(opt_p[1]):.1f}°, L={opt_p[2]:.2f}, "
                 f"Obj={result['optimized_objective']:.2e}, Error={result['error_metric']:.4f}",
             )
         else:
             error_msg = result.get("error", "optimization failed")
-            print(f"Failed {idx + 1}/{len(planes)}: {error_msg}")
+            logger.info(f"Failed {idx + 1}/{len(planes)}: {error_msg}")
 
     # Remove index key from results as it's no longer needed
     for result in optimization_results:
@@ -996,13 +866,13 @@ def robustness_test(
 
     elapsed_time = time.time() - start_time
 
-    print(f"Robustness test completed in {elapsed_time:.2f} seconds")
-    print(f"Success rate: {success_rate:.1%}")
-    print(
+    logger.info(f"Robustness test completed in {elapsed_time:.2f} seconds")
+    logger.info(f"Success rate: {success_rate:.1%}")
+    logger.info(
         f"Error statistics: min={min_error:.4f}, max={max_error:.4f}, "
         f"mean={mean_error:.4f}±{std_error:.4f}",
     )
-    print(
+    logger.info(
         f"Near-zero error samples: {zero_error_count}/{len(error_metrics)} ({zero_error_percentage:.1f}%)",
     )
 
@@ -1040,7 +910,7 @@ def robustness_test(
 
     # Save results to files for later analysis
     if save_results:
-        print("Saving robustness test results...")
+        logger.info("Saving robustness test results...")
 
         # Save main results as compressed numpy file
         np.savez_compressed(
@@ -1104,12 +974,12 @@ def robustness_test(
         with open(metadata_file, "w") as f:
             json.dump(metadata, f, indent=2)
 
-        print("Results saved to:")
-        print(f"  - {results_file}")
-        print(f"  - {metadata_file}")
+        logger.info("Results saved to:")
+        logger.info(f"  - {results_file}")
+        logger.info(f"  - {metadata_file}")
 
     # Generate and save heatmap of error metrics
-    print("Generating robustness heatmap...")
+    logger.info("Generating robustness heatmap...")
     visualization.plot_robustness_heatmap(
         azimuthal_angles=azimuthal_angles,
         polar_angles=polar_angles,
@@ -1228,7 +1098,7 @@ def run_or_load_optimization(
         obj_arr = np.load(obj_path)
         optimized_parameters = params_arr[-1]
         optimized_objective_value = obj_arr[-1]
-        print(
+        logger.info(
             f"Optimized parameters: "
             f"{np.rad2deg(optimized_parameters[0]):.2f}°, "
             f"{np.rad2deg(optimized_parameters[1]):.2f}°, "
@@ -1258,11 +1128,11 @@ def run_or_load_optimization(
             delta,
         )
         end = time.time()
-        print(f"Optimization took {end - start:.2f} seconds.")
+        logger.info(f"Optimization took {end - start:.2f} seconds.")
 
         optimized_parameters = res.x
         optimized_objective_value = res.fun
-        print(
+        logger.info(
             f"Optimized parameters: "
             f"θ = {np.rad2deg(optimized_parameters[0]):.2f}°, "
             f"φ = {np.rad2deg(optimized_parameters[1]):.2f}°, "

@@ -6,6 +6,7 @@ import imageio
 import matplotlib.pyplot as plt
 import numpy as np
 import scipy as sp
+from loguru import logger
 from matplotlib.backends.backend_agg import FigureCanvasAgg as FigureCanvas
 from matplotlib.colors import LogNorm
 from matplotlib.lines import Line2D
@@ -236,7 +237,7 @@ def plot_robustness_heatmap(
         os.makedirs(output_path, exist_ok=True)
         out_file = os.path.join(output_path, "robustness_heatmap.pdf")
         fig.savefig(out_file, format="pdf", bbox_inches="tight", dpi=300)
-        print(f"Robustness heatmap saved to: {out_file}")
+        logger.info(f"Robustness heatmap saved to: {out_file}")
         plt.close(fig)
     else:
         plt.show()
@@ -276,7 +277,7 @@ def load_and_plot_robustness_results(
     if not os.path.exists(metadata_file):
         raise FileNotFoundError(f"Metadata file not found: {metadata_file}")
 
-    print(f"Loading robustness test results from {results_path}")
+    logger.info(f"Loading robustness test results from {results_path}")
 
     # Load numpy data
     data = np.load(results_file)
@@ -305,7 +306,7 @@ def load_and_plot_robustness_results(
     }
 
     # Regenerate the heatmap
-    print("Regenerating robustness heatmap...")
+    logger.info("Regenerating robustness heatmap...")
     plot_robustness_heatmap(
         azimuthal_angles=results["azimuthal_angles"],
         polar_angles=results["polar_angles"],
@@ -415,7 +416,7 @@ def make_plane_gif(
         plt.close(fig)
 
     writer.close()
-    print(f"Saved GIF to {output_path}")
+    logger.info(f"Saved GIF to {output_path}")
 
 
 def make_optimization_gif(
@@ -543,7 +544,7 @@ def make_optimization_gif(
         plt.close(fig)
 
     writer.close()
-    print(
+    logger.info(
         f"Saved optimization GIF to {os.path.join(output_path, 'optimization_progress.gif')}",
     )
 
@@ -883,9 +884,9 @@ def save_3d_slice_as_vector(array3d, save_dir, index, factor, filename):
         fig.savefig(filepath, format="png", bbox_inches="tight", pad_inches=0, dpi=300)
         plt.close(fig)
 
-        print(f"Saved {config['description']} slice to {filepath}")
+        logger.info(f"Saved {config['description']} slice to {filepath}")
 
-    print(f"Saved all orthogonal slices for {filename} to {save_dir}")
+    logger.info(f"Saved all orthogonal slices for {filename} to {save_dir}")
 
 
 # ─── Master mapping: every structure → specific color ─────────────────────────

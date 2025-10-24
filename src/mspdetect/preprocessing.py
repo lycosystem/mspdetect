@@ -1,4 +1,4 @@
-"""This module defines functions for preprocessing the CT images"""
+"""Module defining functions for preprocessing the CT images."""
 
 import os
 import time
@@ -6,10 +6,12 @@ import time
 import joblib
 import numpy as np
 import scipy as sp
+from loguru import logger
 
 
 def mask_via_threshold(ct_image, HU_range=(300, 1500)):
-    """Create a binary mask for the CT image using a specified Hounsfield Unit (HU) range.
+    """Create a binary mask for the CT image using
+    a specified Hounsfield Unit (HU) range.
 
     Parameters
     ----------
@@ -85,7 +87,8 @@ def crop_patient_volumes(struct_dict, slice_axis=2, slice_range=None):
 
 
 def preprocess_bone_image(struct_dict, HU_range):
-    """Preprocess the CT image to extract bone regions using a HU threshold and optional body mask.
+    """Preprocess the CT image to extract bone regions
+    using a HU threshold and optional body mask.
 
     Parameters
     ----------
@@ -124,7 +127,8 @@ def get_cached_interpolator(
     pad_slices=10,
 ):
     """Load or build and cache a RegularGridInterpolator for a cropped+Padded volume,
-    shifting the z‐coordinates so that z=0 aligns with the first slice of the original crop.
+    shifting the z‐coordinates so that z=0 aligns with the first slice
+    of the original crop.
 
     Parameters
     ----------
@@ -173,7 +177,9 @@ def get_cached_interpolator(
             fill_value=None,
         )
         elapsed = time.time() - start
-        print(f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}")
+        logger.warning(
+            f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}",
+        )
         joblib.dump(interpolator, interpolator_path)
 
     return interpolator
