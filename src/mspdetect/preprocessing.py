@@ -177,7 +177,7 @@ def get_cached_interpolator(
             fill_value=None,
         )
         elapsed = time.time() - start
-        logger.warning(
+        logger.info(
             f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}",
         )
         joblib.dump(interpolator, interpolator_path)

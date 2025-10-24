@@ -239,7 +239,7 @@ def run_msp_pipeline(
     # Get patient folders
     folders = _get_patient_folders(base_path, patient)
 
-    for folder in tqdm(folders, desc="Processing CTs"):
+    for folder in tqdm.tqdm(folders, desc="Processing CTs"):
         logger.info(f"Processing patient: {folder}")
 
         patient_results = process_single_patient(

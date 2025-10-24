@@ -19,6 +19,7 @@ from . import (
     pipeline,
     preprocessing,
     visualization,
+    losses,
 )
 
 __all__ = [
@@ -30,5 +31,6 @@ __all__ = [
     "pipeline",
     "run_pipeline",
     "msp_widget",
+    "losses",
     "DEFAULT_PARAMS",
 ]
