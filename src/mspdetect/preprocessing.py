@@ -51,6 +51,8 @@ def crop_patient_volumes(struct_dict, slice_axis=2, slice_range=None):
         Dictionary with cropped structure arrays.
 
     """
+    struct_dict_cropped = struct_dict.copy()
+
     image = struct_dict["Image"][0]
     if "GTVp" in struct_dict:
         gtvp = struct_dict["GTVp"][0]
@@ -78,12 +80,69 @@ def crop_patient_volumes(struct_dict, slice_axis=2, slice_range=None):
         return np.take(arr, idx, axis=slice_axis)
 
     for structure in struct_dict:
-        struct_dict[structure] = _crop(struct_dict[structure][0], idx)
+        struct_dict_cropped[structure] = _crop(struct_dict[structure][0], idx)
 
     idx_interpolation = np.arange(start - 10, end + 1 + 10)
     interpolation_image = _crop(image, idx_interpolation)
 
-    return struct_dict, interpolation_image
+    return struct_dict_cropped, interpolation_image, start, end, slice_axis
+
+
+def crop_patient_volumes_mid(struct_dict, slice_axis=2, slice_range=None):
+    """Crop all structures in the patient dictionary along a specified axis and range.
+
+    Parameters
+    ----------
+    struct_dict : dict
+        Dictionary of structures, each as (image, voxel_size) or image array.
+    slice_axis : int
+        Axis along which to crop (default: 2, axial).
+    slice_range : tuple or None
+        (start, end) indices for cropping. If None, uses GTVp mask or full range.
+
+    Returns
+    -------
+    dict
+        Dictionary with cropped structure arrays.
+
+    """
+    struct_dict_cropped = struct_dict.copy()
+
+    image = struct_dict["Image"][0]
+    if "GTVp" in struct_dict:
+        gtvp = struct_dict["GTVp"][0]
+        slc = sp.ndimage.find_objects(gtvp.astype(int))[0]
+        start, end = slc[slice_axis].start, slc[slice_axis].stop - 1
+    elif slice_range is not None:
+        start, end = slice_range
+    else:
+        start, end = 0, image.shape[slice_axis] - 1
+
+    if "Mandible" in struct_dict:
+        mandible = struct_dict["Mandible"][0]
+        mandible_slices = sp.ndimage.find_objects(mandible.astype(int))
+        if mandible_slices:
+            mandible_slice = mandible_slices[0][slice_axis]
+            mandible_start = mandible_slice.start
+            if end <= mandible_start + 5:
+                mandible_stop_lower = mandible_start + 5
+                start = min(start, mandible_slice.start)
+                end = max(end, mandible_stop_lower)
+
+    start = max(0, start - 20)
+    end = np.shape(struct_dict["Image"][0])[slice_axis]
+    idx = np.arange(start, end)
+
+    def _crop(arr, idx):
+        return np.take(arr, idx, axis=slice_axis)
+
+    for structure in struct_dict:
+        struct_dict_cropped[structure] = _crop(struct_dict[structure][0], idx)
+
+    idx_interpolation = np.arange(start, end)
+    interpolation_image = _crop(image, idx_interpolation)
+
+    return struct_dict_cropped, interpolation_image, start, end, slice_axis
 
 
 def preprocess_bone_image(struct_dict, HU_range):

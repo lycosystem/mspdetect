@@ -12,14 +12,15 @@ This package provides utilities for:
 """
 
 from . import (
+    analysis,
     geometry,
     io,
+    losses,
     msp_widget,
     optimization,
     pipeline,
     preprocessing,
     visualization,
-    losses,
 )
 
 __all__ = [
@@ -32,5 +33,6 @@ __all__ = [
     "run_pipeline",
     "msp_widget",
     "losses",
+    "analysis",
     "DEFAULT_PARAMS",
 ]

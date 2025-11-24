@@ -9,7 +9,7 @@ import tqdm
 import yaml
 from loguru import logger
 
-from mspdetect import io, msp_widget, optimization, preprocessing, visualization
+from mspdetect import io, msp_widget, optimization, preprocessing
 
 
 def load_config(config_path="../config.yaml") -> dict[str, Any]:
@@ -50,10 +50,12 @@ def _run_preprocessing_pipeline(
 ) -> dict[str, Any]:
     """Run the preprocessing pipeline."""
     # Crop volumes
-    struct_dict_cropped, interpolation_image = preprocessing.crop_patient_volumes(
-        struct_dict,
-        slice_axis=pipeline_config["slice_axis"],
-        slice_range=pipeline_config["slice_range"],
+    struct_dict_cropped, interpolation_image, _, _, _ = (
+        preprocessing.crop_patient_volumes(
+            struct_dict,
+            slice_axis=pipeline_config["slice_axis"],
+            slice_range=pipeline_config["slice_range"],
+        )
     )
 
     # Preprocess bone image
@@ -133,7 +135,7 @@ def _run_visualization_pipeline(
         )
 
     if visualization_config["parameter_tweaking"]:
-        visualization.display_interactive_plane_widget(
+        msp_widget.display_interactive_plane_widget(
             struct_dict=struct_dict_cropped,
             voxel_size=voxel_size,
             initial_plane_params=optimized_parameters,

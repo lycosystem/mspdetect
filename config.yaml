@@ -1,6 +1,6 @@
 base_path: "/home/noemibuhrer/Projects/MSP/Patient_structures_clean"
-output_path: "/home/noemibuhrer/Projects/MSP/Patients_processed"
-patient: "101338"
+output_path: "/home/noemibuhrer/Projects/MSP/Patients_processed_new"
+patient: 101338
 
 pipeline:
   structure_names:
@@ -15,10 +15,10 @@ pipeline:
   check_full_anatomy: false
 
 optimization:
-  azimuthal: [0, 60]
-  polar: [90, 45]
-  initialization_steps: 4
+  azimuthal: [0, 30] # 20
+  polar: [90, 40] # 40
+  initialization_steps: 10 # ca. 10
 
 visualization:
-  verification_widget: true
+  verification_widget: false
   parameter_tweaking: false
