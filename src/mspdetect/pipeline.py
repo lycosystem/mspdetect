@@ -17,12 +17,24 @@ def load_config(config_path="../config.yaml") -> dict[str, Any]:
         return yaml.safe_load(f)
 
 
-def _get_patient_folders(base_path: str, patient: str | None) -> list[str]:
+def _get_patient_folders(
+        base_path: str,
+        patient: str | list[str] | None
+    ) -> list[str]:
     """Get list of patient folders to process."""
-    if patient is not None:
+    if patient is None:
+        # Process all patients in base_path
+        return sorted([d for d in os.listdir(base_path)])
+    elif isinstance(patient, list):
+        # Process specific list of patients
+        return patient
+    elif os.path.isfile(patient):
+        # Read patient list from file
+        with open(patient) as f:
+            return [line.strip() for line in f if line.strip()]
+    else:
+        # Process single patient
         return [str(patient)]
-    return sorted([d for d in os.listdir(base_path)])
-
 
 def generate_output_directory_name(base_name, pipeline_config, opt_config):
     """Generate output directory name encoding all parameters.
@@ -340,20 +352,11 @@ def run_msp_pipeline(
             results["parameters"].append(patient_results["parameters"])
             results["objective_values"].append(patient_results["objective_value"])
 
-        if patient is not None:
-            break
-
     end_time = time.time()
     duration = end_time - start_time
 
     # Save batch results
-    if patient is None:
-        _save_batch_results(output_path, results)
-        logger.info(
-            f"Pipeline completed for {len(folders)} patients in {duration:.2f} seconds.",
-        )
-
-    else:
-        logger.info(
-            f"Pipeline completed for patient {patient} in {duration:.2f} seconds.",
-        )
+    _save_batch_results(output_path, results)
+    logger.info(
+        f"Pipeline completed for {len(folders)} patient(s) in {duration:.2f} seconds.",
+    )
