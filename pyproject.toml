@@ -24,6 +24,7 @@ dependencies = [
     "ipympl",
     "loguru",
     "tqdm",
+    "pyyaml",
 ]
 dynamic = ["version"]
 

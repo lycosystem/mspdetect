@@ -1,9 +1,14 @@
 """Interactive Widget for Mid-Sagittal Plane Visualization"""
 
+import os
+
 import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
+from loguru import logger
 from matplotlib.lines import Line2D
+
+import mspdetect as msp
 
 
 def display_scrollable_views(
@@ -265,6 +270,85 @@ def display_scrollable_views(
             continuous_update=False,
         ),
     )
+
+
+def scrollable_patient(
+    patient_path: str | None,
+    config_path: str | None,
+    result_path: str | None,
+    crop_reference: str | None = "GTVp",
+    crop_margin: int | None = 0,
+    crop_mode: str | None = "margins",
+    fixed_size: int | None = None,
+) -> None:
+    """Display scrollable views of one patient"""
+    config = msp.pipeline.load_config(config_path)
+    pipeline_config = config["pipeline"]
+    structure_name_mapping = pipeline_config.get("structure_name_mapping", None)
+
+    # Load patient data
+    struct_dict = msp.io.load_patient_structures(
+        patient_path,
+        pipeline_config["structure_names"],
+        structure_name_mapping,
+    )
+
+    if not struct_dict:
+        logger.warning(f"No matching files found in {patient_path}. Skipping...")
+        return
+
+    voxel_size = struct_dict["Image"][1]
+
+    # Try to load full-image parameters
+    full_param_path = os.path.join(result_path, "optimized_parameter_full_image.npy")
+
+    if os.path.exists(full_param_path):
+        params = np.load(full_param_path, mmap_mode="r").copy()
+    else:
+        # Use cropped params and convert
+        cropped_param_path = os.path.join(result_path, "parameter_array.npy")
+        params_cropped = np.load(cropped_param_path, mmap_mode="r")[-1].copy()
+        _, _, _, crop_start, _, _ = msp.preprocessing.crop_patient_volumes(
+            struct_dict,
+            pipeline_config["slice_axis"],
+            pipeline_config["slice_range"],
+            pipeline_config["margins"],
+            pipeline_config["reference"],
+            pipeline_config.get("crop_mode", None),
+            pipeline_config.get("fixed_size", None),
+        )
+        params = msp.geometry.crop_to_full_coords(
+            params_cropped,
+            crop_start,
+            voxel_size,
+        )
+
+    logger.info(f"loaded params {params}")
+
+    struct_dict_cropped, _, _, crop_start, crop_end, crop_axis = (
+        msp.preprocessing.crop_patient_volumes(
+            struct_dict,
+            slice_axis=2,
+            slice_range=None,
+            margins=crop_margin,
+            reference=crop_reference,
+            crop_mode=crop_mode,
+            fixed_size=fixed_size,
+        )
+    )
+    plane_params_cropped = msp.geometry.full_to_crop_coords(
+        params,
+        crop_start,
+        voxel_size,
+    )
+
+    display_scrollable_views(
+        struct_dict_cropped,
+        voxel_size,
+        plane_coeffs_list=[plane_params_cropped],
+        optimization_methods_list=None,
+    )
+    return
 
 
 def display_interactive_plane_widget(

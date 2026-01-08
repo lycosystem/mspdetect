@@ -82,3 +82,55 @@ def generate_normal(theta: float, phi: float) -> np.ndarray:
 
     # Stack components along the last axis to get shape (..., 3)
     return np.stack([x, y, z], axis=-1)
+
+
+def crop_to_full_coords(params, crop_start, voxel_size):
+    """Convert plane parameters from cropped to full image coordinates.
+
+    Parameters
+    ----------
+    params : np.ndarray or tuple
+        Plane parameters [azimuthal, polar, L] in cropped coordinates
+    crop_start : int
+        Starting slice index of the crop in the full image
+    voxel_size : tuple or np.ndarray
+        Voxel spacing (sy, sx, sz) in mm
+
+    Returns
+    -------
+    np.ndarray
+        Plane parameters [azimuthal, polar, L] in full image coordinates
+
+    """
+    azimuthal, polar, L_cropped = params
+    n = generate_normal(azimuthal, polar)
+    k = np.array([0, 0, crop_start * voxel_size[-1]])
+    full_L = np.dot(k, n) + L_cropped
+
+    return np.array([azimuthal, polar, full_L])
+
+
+def full_to_crop_coords(params, crop_start, voxel_size):
+    """Convert plane parameters from full to cropped image coordinates.
+
+    Parameters
+    ----------
+    params : np.ndarray or tuple
+        Plane parameters [azimuthal, polar, L] in full image coordinates
+    crop_start : int
+        Starting slice index of the crop in the full image
+    voxel_size : tuple or np.ndarray
+        Voxel spacing (sy, sx, sz) in mm
+
+    Returns
+    -------
+    np.ndarray
+        Plane parameters [azimuthal, polar, L] in cropped coordinates
+
+    """
+    azimuthal, polar, L_full = params
+    n = generate_normal(azimuthal, polar)
+    k = np.array([0, 0, crop_start * voxel_size[-1]])
+    cropped_L = L_full - np.dot(k, n)
+
+    return np.array([azimuthal, polar, cropped_L])

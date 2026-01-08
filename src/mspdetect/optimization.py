@@ -991,69 +991,12 @@ def robustness_test(
     return results
 
 
-def optimize_plane(
-    initial_params_array,
-    image,
-    interpolator_intensity,
-    voxel_size,
-    delta,
-):
-    """Optimize the plane parameters to minimize the objective function using BFGS.
-
-    Parameters
-    ----------
-    initial_params_array : array-like of shape (3,)
-        Initial guess for plane parameters [azimuthal, polar, L].
-    image : np.ndarray
-        The image or mask to optimize over.
-    interpolator_intensity : RegularGridInterpolator
-        Interpolator for the original image.
-    voxel_size : array-like of shape (3,)
-        Physical voxel size for each axis.
-    delta : float
-        Huber loss delta parameter.
-
-    Returns
-    -------
-    OptimizeResult
-        Result object from scipy.optimize.minimize, with additional attributes:
-        - objective_value_list: list of objective values per iteration.
-        - params_list: list of parameter arrays per iteration.
-
-    """
-    objective_value_list = []
-    params_list = []
-
-    def callback(xk):
-        f_val = compute_objective(xk, image, interpolator_intensity, voxel_size, delta)
-        objective_value_list.append(f_val)
-        params_list.append(xk.copy())
-
-    res = sp.optimize.minimize(
-        compute_objective,
-        x0=initial_params_array,
-        args=(image, interpolator_intensity, voxel_size, delta),
-        method="BFGS",
-        jac=None,
-        callback=callback,
-    )
-    params_list.append(res.x.copy())
-    objective_value_list.append(res.fun)
-
-    res.objective_value_list = objective_value_list
-    res.params_list = params_list
-
-    return res
-
-
 def run_or_load_optimization(
     output_path_patient,
-    image,
+    processed_data,
     voxel_size_image,
     delta,
     initial_plane,
-    bone_ct,
-    interpolator,
     optimized_parameter_list,
     optimized_objective_value_list,
 ):
@@ -1063,18 +1006,14 @@ def run_or_load_optimization(
     ----------
     output_path_patient : str
         Directory to save/load optimization results.
-    image : np.ndarray
-        The original image array.
+    processed_data : dict
+        Dictionary with cropped images, interpolator and cropping info.
     voxel_size_image : array-like of shape (3,)
         Physical voxel size for each axis.
     delta : float
         Huber loss delta parameter.
     initial_plane : array-like of shape (3,)
         Initial guess for plane parameters.
-    bone_ct : np.ndarray
-        Bone mask or intensity image.
-    interpolator : RegularGridInterpolator
-        Interpolator for the original image.
     optimized_parameter_list : list
         List to append optimized parameters to.
     optimized_objective_value_list : list
@@ -1089,12 +1028,24 @@ def run_or_load_optimization(
             Final objective function value.
 
     """
-    param_path = os.path.join(output_path_patient, "parameter_array.npy")
+    param_path_cropped = os.path.join(
+        output_path_patient,
+        "parameter_array_cropped_image.npy",
+    )
+    param_path_full = os.path.join(
+        output_path_patient,
+        "optimized_parameter_full_image.npy",
+    )
     obj_path = os.path.join(output_path_patient, "objective_value_array.npy")
+    crop_info_path = os.path.join(output_path_patient, "crop_info.npy")
 
-    if os.path.exists(param_path) and os.path.exists(obj_path):
+    image = processed_data["image"]
+    bone_ct = processed_data["bone_ct"]
+    interpolator = processed_data["interpolator"]
+
+    if os.path.exists(param_path_cropped) and os.path.exists(obj_path):
         # load the last saved result
-        params_arr = np.load(param_path)
+        params_arr = np.load(param_path_cropped)
         obj_arr = np.load(obj_path)
         optimized_parameters = params_arr[-1]
         optimized_objective_value = obj_arr[-1]
@@ -1106,6 +1057,7 @@ def run_or_load_optimization(
             f"with MSE {optimized_objective_value:.2f}",
         )
 
+        # visualization with the cropped image
         visualization.make_plane_gif(
             image,
             voxel_size_image,
@@ -1140,6 +1092,7 @@ def run_or_load_optimization(
             f"with MSE {optimized_objective_value:.2f}",
         )
 
+        # visualization with the cropped image
         visualization.make_plane_gif(
             image,
             voxel_size_image,
@@ -1159,9 +1112,27 @@ def run_or_load_optimization(
         # optimized_parameters_manual_10774767 = (-0.0017453292519943233, 1.594660423674561, 240)
         # optimized_parameters_manual_10780163 = (-0.03490658503988659, 1.5982842763770915, 269)
 
-        np.save(param_path, np.array(res.params_list))
+        params_cropped = np.array(res.params_list)
+        np.save(param_path_cropped, params_cropped)
+
         np.save(obj_path, np.array(res.objective_value_list))
 
+        optimized_parameter_full = geometry.crop_to_full_coords(
+            optimized_parameters,
+            processed_data["crop_start"],
+            voxel_size_image,
+        )
+        np.save(param_path_full, optimized_parameter_full)
+
+        crop_info = {
+            "crop_start": processed_data["crop_start"],
+            "crop_end": processed_data["crop_end"],
+            "reference": processed_data["reference"],
+            "margins": processed_data["margins"],
+        }
+        np.save(crop_info_path, crop_info)
+
+        # maybe also add a full list here?
         optimized_parameter_list.append(optimized_parameters)
         optimized_objective_value_list.append(optimized_objective_value)
 

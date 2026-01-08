@@ -109,45 +109,49 @@ def get_image_and_voxel_size_from_gzip(gzip_file_path):
     return None, None
 
 
-def get_image_and_voxel_size_from_gzip(gzip_file_path):
-    """Extract the image array and voxel size from a gzipped NIfTI file.
+# def get_image_and_voxel_size_from_gzip(gzip_file_path):
+#     """Extract the image array and voxel size from a gzipped NIfTI file.
 
-    Parameters
-    ----------
-    gzip_file_path : str
-        Path to the gzipped NIfTI file.
+#     Parameters
+#     ----------
+#     gzip_file_path : str
+#         Path to the gzipped NIfTI file.
 
-    Returns
-    -------
-    tuple
-        img_data : np.ndarray or None
-            The image data array, or None if loading fails.
-        voxel_size : np.ndarray or None
-            The voxel size for each axis, or None if loading fails.
+#     Returns
+#     -------
+#     tuple
+#         img_data : np.ndarray or None
+#             The image data array, or None if loading fails.
+#         voxel_size : np.ndarray or None
+#             The voxel size for each axis, or None if loading fails.
 
-    """
-    file_content = open_gzip_file(gzip_file_path)
-    if file_content is not None:
-        with open("temp_nifti.nii", "wb") as temp_file:
-            temp_file.write(file_content)
+#     """
+#     file_content = open_gzip_file(gzip_file_path)
+#     if file_content is not None:
+#         with open("temp_nifti.nii", "wb") as temp_file:
+#             temp_file.write(file_content)
 
-        # 🔹 Debugging: Check if the file was actually written
-        file_size = os.path.getsize("temp_nifti.nii")
-        if file_size == 0:
-            print(
-                f"❌ Error: 'temp_nifti.nii' was written but is empty! ({gzip_file_path})",
-            )
-            return None, None
+#         # 🔹 Debugging: Check if the file was actually written
+#         file_size = os.path.getsize("temp_nifti.nii")
+#         if file_size == 0:
+#             print(
+#                 f"❌ Error: 'temp_nifti.nii' was written but is empty! ({gzip_file_path})",
+#             )
+#             return None, None
 
-        img_data, voxel_size = load_nifti_file("temp_nifti.nii")
-        os.remove("temp_nifti.nii")  # Remove temp file after reading
+#         img_data, voxel_size = load_nifti_file("temp_nifti.nii")
+#         os.remove("temp_nifti.nii")  # Remove temp file after reading
 
-        return img_data, voxel_size
-    print(f"❌ Error: Failed to read file content from '{gzip_file_path}'")
-    return None, None
+#         return img_data, voxel_size
+#     print(f"❌ Error: Failed to read file content from '{gzip_file_path}'")
+#     return None, None
 
 
-def load_patient_structures(patient_folder: str, structure_names=None):
+def load_patient_structures(
+    patient_folder: str,
+    structure_names=None,
+    structure_name_mapping=None,
+):
     """Load specified structures from a patient folder containing NIfTI or gzipped NIfTI files.
 
     Parameters
@@ -166,6 +170,15 @@ def load_patient_structures(patient_folder: str, structure_names=None):
     if structure_names is None:
         structure_names = ["Image"]
 
+    search_names = {}
+
+    if structure_name_mapping is not None:
+        for file_name, standard_name in structure_name_mapping.items():
+            if standard_name in structure_names:
+                # print(standard_name)
+                search_names[file_name] = standard_name
+    else:
+        search_names = {name: name for name in structure_names}
     struct_dict = {}
     for root, _, files in os.walk(patient_folder):
         for f in files:
@@ -182,8 +195,8 @@ def load_patient_structures(patient_folder: str, structure_names=None):
                 base = name_part[:-4]
 
             # Compare with expected structure names (case-insensitive)
-            for struct_name in structure_names:
-                if base.lower() == struct_name.lower():
+            for file_name, standard_name in search_names.items():
+                if base.lower() == file_name.lower():
                     file_path = os.path.join(root, f)
                     try:
                         if f.endswith(".nii.gz"):
@@ -194,12 +207,12 @@ def load_patient_structures(patient_folder: str, structure_names=None):
                             img, voxel_size = load_nifti_file(file_path)
                     except Exception as e:
                         logging.error(
-                            f"Error loading '{struct_name}' from {file_path}: {e}",
+                            f"Error loading '{standard_name}' from {file_path}: {e}",
                         )
                         continue
 
                     if img is not None:
-                        struct_dict[struct_name] = (img, voxel_size)
-                        print(f"Loaded '{struct_name}' from {file_path}")
+                        struct_dict[standard_name] = (img, voxel_size)
+                        print(f"Loaded '{standard_name}' from {file_path}")
                     break
     return struct_dict

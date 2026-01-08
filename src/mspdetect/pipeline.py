@@ -24,6 +24,70 @@ def _get_patient_folders(base_path: str, patient: str | None) -> list[str]:
     return sorted([d for d in os.listdir(base_path)])
 
 
+def generate_output_directory_name(base_name, pipeline_config, opt_config):
+    """Generate output directory name encoding all parameters.
+
+    Parameters
+    ----------
+    base_name : str
+        Base name for output directory (e.g., "Patients_processed")
+    pipeline_config : dict
+        Cropping parameters: margins, reference, or slice_range
+    opt_config : dict
+        Optimization parameters: azimuthal_range, polar_range, initialization_method
+
+    Returns
+    -------
+    str
+        Directory name with encoded parameters
+
+    Examples
+    --------
+    >>> generate_output_directory_name(
+    ...     "Patients_processed",
+    ...     {"margins": 20, "reference": "GTVp"},
+    ...     {"azimuthal_range": [-180, 180], "polar_range": [0, 180], "initialization_method": "grid"}
+    ... )
+    'Patients_processed_m20_refGTVp_az-180to180_pol0to180_initgrid'
+
+    """
+    components = [base_name]
+
+    # Crop configuration
+    if "slice_range" in pipeline_config and pipeline_config["slice_range"] is not None:
+        start, end = pipeline_config["slice_range"]
+        components.append(f"range{start}-{end}")
+    elif "fixed_size" in pipeline_config and pipeline_config["fixed_size"] is not None:
+        fixed_size = pipeline_config["fixed_size"]
+        components.append(f"fixed{fixed_size}vox")
+    elif "margins" in pipeline_config and pipeline_config["margins"] is not None:
+        margins = pipeline_config["margins"]
+        if isinstance(margins, int):
+            components.append(f"m{margins}")
+        elif isinstance(margins, tuple):
+            lower, upper = margins
+            components.append(f"m{lower}-{upper}")
+
+        ref = pipeline_config.get("reference", "GTVp")
+        components.append(f"ref{ref}")
+    else:
+        # No margins, just reference
+        ref = pipeline_config.get("reference", "GTVp")
+        components.append(f"ref{ref}")
+
+    # Optimization ranges
+    az_range = opt_config.get("azimuthal", [0, 90])
+    pol_range = opt_config.get("polar", [90, 10])
+    components.append(f"az{az_range[0]}to{az_range[1]}")
+    components.append(f"pol{pol_range[0]}to{pol_range[1]}")
+
+    # Initialization method
+    init_steps = opt_config.get("initialization_steps", "grid")
+    components.append(f"init{init_steps}")
+
+    return "_".join(components)
+
+
 def _display_full_anatomy(
     struct_dict: dict,
     voxel_size: np.ndarray,
@@ -50,12 +114,21 @@ def _run_preprocessing_pipeline(
 ) -> dict[str, Any]:
     """Run the preprocessing pipeline."""
     # Crop volumes
-    struct_dict_cropped, interpolation_image, _, _, _ = (
-        preprocessing.crop_patient_volumes(
-            struct_dict,
-            slice_axis=pipeline_config["slice_axis"],
-            slice_range=pipeline_config["slice_range"],
-        )
+    (
+        struct_dict_cropped,
+        interpolation_image,
+        interpolation_pad,
+        crop_start,
+        crop_end,
+        crop_axis,
+    ) = preprocessing.crop_patient_volumes(
+        struct_dict,
+        slice_axis=pipeline_config["slice_axis"],
+        slice_range=pipeline_config["slice_range"],
+        margins=pipeline_config["margins"],
+        reference=pipeline_config["reference"],
+        crop_mode=pipeline_config["crop_mode"],
+        fixed_size=pipeline_config["fixed_size"],
     )
 
     # Preprocess bone image
@@ -69,6 +142,7 @@ def _run_preprocessing_pipeline(
         output_path,
         interpolation_image,
         voxel_size,
+        pad_slices=interpolation_pad,
     )
 
     return {
@@ -76,6 +150,10 @@ def _run_preprocessing_pipeline(
         "image": image,
         "bone_ct": bone_ct,
         "interpolator": interpolator,
+        "crop_start": crop_start,
+        "crop_end": crop_end,
+        "margins": pipeline_config["margins"],
+        "reference": pipeline_config["reference"],
     }
 
 
@@ -102,12 +180,10 @@ def _run_optimization_pipeline(
     optimized_parameters, optimized_objective_values = (
         optimization.run_or_load_optimization(
             output_path,
-            processed_data["image"],
+            processed_data,
             voxel_size,
             delta,
             initial_plane,
-            processed_data["bone_ct"],
-            processed_data["interpolator"],
             [],  # optimized_parameter_list
             [],  # optimized_objective_value_list
         )
@@ -168,10 +244,13 @@ def process_single_patient(
     # Create output directory
     os.makedirs(output_path, exist_ok=True)
 
+    structure_name_mapping = pipeline_config.get("structure_name_mapping", None)
+
     # Load patient data
     struct_dict = io.load_patient_structures(
         folder_path,
         pipeline_config["structure_names"],
+        structure_name_mapping,
     )
 
     if struct_dict is None:
@@ -228,13 +307,18 @@ def run_msp_pipeline(
 
     # Extract configuration sections
     base_path = config["base_path"]
-    output_path = config["output_path"]
+    # output_path = config["output_path"]
     patient = config["patient"]
 
     pipeline_config = config["pipeline"]
     optimization_config = config["optimization"]
     visualization_config = config["visualization"]
 
+    output_path = generate_output_directory_name(
+        base_path,
+        pipeline_config,
+        optimization_config,
+    )
     start_time = time.time()
     results = {"parameters": [], "objective_values": []}
 
