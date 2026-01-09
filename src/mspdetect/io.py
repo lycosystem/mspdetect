@@ -216,3 +216,13 @@ def load_patient_structures(
                         print(f"Loaded '{standard_name}' from {file_path}")
                     break
     return struct_dict
+
+
+def load_crop_info(output_path):
+    crop_info_path = os.path.join(output_path, "crop_info.npy")
+
+    if os.path.exists(crop_info_path):
+        crop_data = np.load(crop_info_path, allow_pickle=True).item()
+        return crop_data.get("crop_info", None)
+
+    return None

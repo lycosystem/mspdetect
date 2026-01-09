@@ -1,5 +1,4 @@
 import os
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -7,12 +6,6 @@ import tqdm
 from loguru import logger
 
 import mspdetect as msp
-
-
-def load_plane_params(path: Path):
-    path_to_file = os.path.join(path, "parameter_array.npy")
-    params = np.load(path_to_file, mmap_mode="r")[-1].copy()
-    return params
 
 
 def compute_volume_structure(plane_params, structure, voxel_size):
@@ -37,24 +30,24 @@ def compute_volumes_for_structures(
     margins,
     slice_range,
     slice_axis,
+    exclude_mandible=False,
 ):
     """Computes the volumes on the left and right side of the detected mid-sagittal plane
     for the specified structures.
     """
     results = {}
 
-    struct_dict_cropped, _, _, crop_start, crop_end, crop_axis = (
-        msp.preprocessing.crop_patient_volumes(
-            struct_dict,
-            slice_axis,
-            slice_range,
-            margins,
-            reference_structure,
-        )
+    struct_dict_cropped, _, crop_info = msp.preprocessing.crop_patient_volumes(
+        struct_dict,
+        slice_axis,
+        slice_range,
+        margins,
+        reference_structure,
+        exclude_mandible,
     )
     plane_params_cropped = msp.geometry.full_to_crop_coords(
         plane_params,
-        crop_start,
+        crop_info,
         voxel_size,
     )
     print("cropped_params = ", plane_params_cropped)
@@ -129,20 +122,21 @@ def calculate_volumes_for_patient(
         cropped_param_path = os.path.join(result_path, "parameter_array.npy")
         params_cropped = np.load(cropped_param_path, mmap_mode="r")[-1].copy()
 
-        struct_dict_cropped, _, _, crop_start, crop_end, _ = (
-            msp.preprocessing.crop_patient_volumes(
-                struct_dict,
-                pipeline_config["slice_axis"],
-                pipeline_config["slice_range"],
-                pipeline_config["margins"],
-                pipeline_config["reference"],
-                pipeline_config["crop_mode"],
-                pipeline_config["fixed_size"],
-            )
+        struct_dict_cropped, _, crop_info = msp.preprocessing.crop_patient_volumes(
+            struct_dict,
+            pipeline_config["slice_axis"],
+            pipeline_config["slice_range"],
+            pipeline_config["margins"],
+            pipeline_config["reference"],
+            pipeline_config["crop_mode"],
+            pipeline_config["fixed_size"],
+            pipeline_config.get("exclude_mandible", False),
+            pipeline_config.get("crop_shoulders", None),
         )
+
         params = msp.geometry.crop_to_full_coords(
             params_cropped,
-            crop_start,
+            crop_info,
             voxel_size,
         )
 
@@ -156,6 +150,7 @@ def calculate_volumes_for_patient(
         crop_margin,
         crop_range,
         crop_slice,
+        pipeline_config.get("exclude_mandible", False),
     )
     # print(volumes)
     return volumes
@@ -216,80 +211,6 @@ def pipeline_volumes_computation(
         )
         if patient_result:
             volumes[folder] = patient_result
-
-        # # load structures of patient
-        # struct_dict = msp.io.load_patient_structures(
-        #     folder_path,
-        #     structure_names=["Image", "Spinal Cord", "GTVp", "Mandible", "Body"],
-        # )
-        # voxel_size = struct_dict["Image"][1]
-
-        # # load msp parameters
-        # params = load_plane_params(result_path)
-
-        # # compute cropped patient structure
-        # struct_dict_cropped, _, _, start, end, _ = msp.preprocessing.crop_patient_volumes(
-        #     struct_dict,
-        #     pipeline_config["slice_axis"],
-        #     pipeline_config["slice_range"],
-        # )
-
-        # if crop_level == "full":
-        #     patient_volumes = compute_volumes_for_structures(
-        #         params,
-        #         struct_dict_cropped,
-        #         voxel_size,
-        #         structure_names,
-        #     )
-
-        # elif crop_level == "partial":
-        #     struct_dict_cropped_mid, _, _, start_mid, end_mid, _ = (
-        #         msp.preprocessing.crop_patient_volumes_new(
-        #             struct_dict,
-        #             pipeline_config["slice_axis"],
-        #             pipeline_config["slice_range"],
-        #             margins = 20,
-        #         )
-        #     )
-
-        #     # calculate new parameters for partially cropped image
-        #     azimuthal, polar, L = params
-        #     # n = msp.geometry.generate_normal(azimuthal, polar)
-        #     # #print(voxel_size[2])
-        #     # k = np.array([0.0, 0.0, (start - start_mid) * voxel_size[2]])
-        #     # new_L = L + np.dot(k, n)
-
-        #     #params_new = np.array([azimuthal, polar, new_L])
-        #     patient_volumes = compute_volumes_for_structures(
-        #         #params_new,
-        #         params,
-        #         struct_dict_cropped_mid,
-        #         voxel_size,
-        #         ["Mandible", "Spinal Cord", "Body"],
-        #     )
-
-        # elif crop_level == "none":
-        #     # calculate new parameters for none cropped image
-        #     azimuthal, polar, L = params
-        #     n = msp.geometry.generate_normal(azimuthal, polar)
-        #     print(voxel_size[2])
-        #     k = np.array([0.0, 0.0, start * voxel_size[2]])
-        #     new_L = L + np.dot(k, n)
-
-        #     params_new = np.array([azimuthal, polar, new_L])
-        #     patient_volumes = compute_volumes_for_structures(
-        #         params_new,
-        #         struct_dict,
-        #         voxel_size,
-        #         ["Mandible", "Spinal Cord", "Body"],
-        #     )
-
-        # else:
-        #     raise Exception(
-        #         f"Invalid crop level: {crop_level}! Must be either none, partial or full.",
-        #     )
-
-        # volumes[folder] = patient_volumes
 
     # Create DataFrame with columns
     df_volumes = pd.DataFrame.from_dict(volumes, orient="index")

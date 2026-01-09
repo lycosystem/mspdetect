@@ -18,23 +18,24 @@ def load_config(config_path="../config.yaml") -> dict[str, Any]:
 
 
 def _get_patient_folders(
-        base_path: str,
-        patient: str | list[str] | None
-    ) -> list[str]:
+    base_path: str,
+    patient: str | list[str] | None,
+) -> list[str]:
     """Get list of patient folders to process."""
     if patient is None:
         # Process all patients in base_path
         return sorted([d for d in os.listdir(base_path)])
-    elif isinstance(patient, list):
+    if isinstance(patient, list):
         # Process specific list of patients
         return patient
-    elif os.path.isfile(patient):
+    if os.path.isfile(patient):
         # Read patient list from file
         with open(patient) as f:
             return [line.strip() for line in f if line.strip()]
     else:
         # Process single patient
         return [str(patient)]
+
 
 def generate_output_directory_name(base_name, pipeline_config, opt_config):
     """Generate output directory name encoding all parameters.
@@ -64,6 +65,15 @@ def generate_output_directory_name(base_name, pipeline_config, opt_config):
 
     """
     components = [base_name]
+
+    if pipeline_config.get("exclude_mandible", False):
+        components.append("noMandible")
+
+    crop_shoulders = pipeline_config.get("crop_shoulders")
+    if crop_shoulders is not None:
+        axis = crop_shoulders.get("axis", 1)
+        extent_mm = crop_shoulders.get("max_extent_mm", 0)
+        components.append(f"shoulder{extent_mm}mm_ax{axis}")
 
     # Crop configuration
     if "slice_range" in pipeline_config and pipeline_config["slice_range"] is not None:
@@ -129,10 +139,7 @@ def _run_preprocessing_pipeline(
     (
         struct_dict_cropped,
         interpolation_image,
-        interpolation_pad,
-        crop_start,
-        crop_end,
-        crop_axis,
+        crop_info,
     ) = preprocessing.crop_patient_volumes(
         struct_dict,
         slice_axis=pipeline_config["slice_axis"],
@@ -141,6 +148,8 @@ def _run_preprocessing_pipeline(
         reference=pipeline_config["reference"],
         crop_mode=pipeline_config["crop_mode"],
         fixed_size=pipeline_config["fixed_size"],
+        exclude_mandible=pipeline_config.get("exclude_mandible", False),
+        crop_shoulders=pipeline_config.get("crop_shoulders", None),
     )
 
     # Preprocess bone image
@@ -154,7 +163,7 @@ def _run_preprocessing_pipeline(
         output_path,
         interpolation_image,
         voxel_size,
-        pad_slices=interpolation_pad,
+        crop_info,
     )
 
     return {
@@ -162,8 +171,7 @@ def _run_preprocessing_pipeline(
         "image": image,
         "bone_ct": bone_ct,
         "interpolator": interpolator,
-        "crop_start": crop_start,
-        "crop_end": crop_end,
+        "crop_info": crop_info,
         "margins": pipeline_config["margins"],
         "reference": pipeline_config["reference"],
     }

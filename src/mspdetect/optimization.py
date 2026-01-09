@@ -1105,12 +1105,6 @@ def run_or_load_optimization(
             output_path_patient,
             title="Optimization of Objective Function",
         )
-        # np.save(param_path,   np.array([[-0.06283185307179585, 1.6244956418729801, 262]]))
-        # np.save(obj_path,     np.array(res.objective_value_list))
-
-        # optimized_parameters_manual_10587029 = (-0.06283185307179585, 1.6244956418729801, 262)
-        # optimized_parameters_manual_10774767 = (-0.0017453292519943233, 1.594660423674561, 240)
-        # optimized_parameters_manual_10780163 = (-0.03490658503988659, 1.5982842763770915, 269)
 
         params_cropped = np.array(res.params_list)
         np.save(param_path_cropped, params_cropped)
@@ -1119,14 +1113,13 @@ def run_or_load_optimization(
 
         optimized_parameter_full = geometry.crop_to_full_coords(
             optimized_parameters,
-            processed_data["crop_start"],
+            processed_data["crop_info"],
             voxel_size_image,
         )
         np.save(param_path_full, optimized_parameter_full)
 
         crop_info = {
-            "crop_start": processed_data["crop_start"],
-            "crop_end": processed_data["crop_end"],
+            "crop_info": processed_data["crop_info"],
             "reference": processed_data["reference"],
             "margins": processed_data["margins"],
         }
