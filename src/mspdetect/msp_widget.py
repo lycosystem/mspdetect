@@ -51,6 +51,8 @@ def display_scrollable_views(
         shoulder_axis = shoulder_info.get("axis")
         shoulder_start = shoulder_info.get("start")
         shoulder_end = shoulder_info.get("end")
+    else:
+        shoulder_axis = None
 
     # Calculate center of mass using the Body structure for cropping
     # Use Body structure if available, otherwise fallback to geometric center
@@ -202,22 +204,23 @@ def display_scrollable_views(
                 ),
             )
 
-        if shoulder_axis == 0:  # Y-axis
-            ax0.axhline(
-                y=shoulder_start,
-                color="green",
-                linestyle="--",
-                label="Shoulder crop",
-            )
-            ax0.axhline(y=shoulder_end, color="green", linestyle="--")
-        elif shoulder_axis == 1:  # X-axis
-            ax0.axvline(
-                x=shoulder_start,
-                color="green",
-                linestyle="--",
-                label="Shoulder crop",
-            )
-            ax0.axvline(x=shoulder_end, color="green", linestyle="--")
+        if shoulder_axis is not None:
+            if shoulder_axis == 0:  # Y-axis
+                ax0.axhline(
+                    y=shoulder_start,
+                    color="green",
+                    linestyle="--",
+                    label="Shoulder crop",
+                )
+                ax0.axhline(y=shoulder_end, color="green", linestyle="--")
+            elif shoulder_axis == 1:  # X-axis
+                ax0.axvline(
+                    x=shoulder_start,
+                    color="green",
+                    linestyle="--",
+                    label="Shoulder crop",
+                )
+                ax0.axvline(x=shoulder_end, color="green", linestyle="--")
 
         ax0.legend(handles=handles, loc="upper right")
 
