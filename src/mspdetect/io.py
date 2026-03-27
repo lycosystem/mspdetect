@@ -5,6 +5,7 @@ from __future__ import annotations
 import gzip
 import logging
 import os
+import tempfile
 
 import nibabel as nib
 import numpy as np
@@ -89,22 +90,25 @@ def get_image_and_voxel_size_from_gzip(gzip_file_path):
 
     """
     file_content = open_gzip_file(gzip_file_path)
+
     if file_content is not None:
-        with open("temp_nifti.nii", "wb") as temp_file:
+        with tempfile.NamedTemporaryFile(suffix=".nii", delete=False) as temp_file:
             temp_file.write(file_content)
+            temp_filename = temp_file.name
 
         # 🔹 Debugging: Check if the file was actually written
-        file_size = os.path.getsize("temp_nifti.nii")
-        if file_size == 0:
-            print(
-                f"❌ Error: 'temp_nifti.nii' was written but is empty! ({gzip_file_path})",
-            )
-            return None, None
+        try:
+            file_size = os.path.getsize(temp_filename)
+            if file_size == 0:
+                print(
+                    f"❌ Error: temp file was written but is empty! ({gzip_file_path})",
+                )
+                return None, None
 
-        img_data, voxel_size = load_nifti_file("temp_nifti.nii")
-        os.remove("temp_nifti.nii")  # Remove temp file after reading
-
-        return img_data, voxel_size
+            img_data, voxel_size = load_nifti_file(temp_filename)
+            return img_data, voxel_size
+        finally:
+            os.remove(temp_filename)
     print(f"❌ Error: Failed to read file content from '{gzip_file_path}'")
     return None, None
 
@@ -216,3 +220,13 @@ def load_patient_structures(
                         print(f"Loaded '{standard_name}' from {file_path}")
                     break
     return struct_dict
+
+
+def load_crop_info(output_path):
+    crop_info_path = os.path.join(output_path, "crop_info.npy")
+
+    if os.path.exists(crop_info_path):
+        crop_data = np.load(crop_info_path, allow_pickle=True).item()
+        return crop_data.get("crop_info", None)
+
+    return None
