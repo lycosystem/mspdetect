@@ -84,6 +84,20 @@ def generate_normal(theta: float, phi: float) -> np.ndarray:
     return np.stack([x, y, z], axis=-1)
 
 
+def physical_plane_params(params, voxel_size):
+    """Convert plane parameters from voxel space to physical space.
+
+    :param params: Plane parameters in voxel space (theta, phi, L)
+    :param voxel_size: np.array, voxel size
+    """
+    azimuthal, polar, L = params
+    n = generate_normal(azimuthal, polar)
+    vec_voxel = L * n
+    vec_phys = np.multiply(vec_voxel, voxel_size)
+    return vector_to_angles(vec_phys)
+
+
+# don't need to convert to physical params, because the plane params are already the physical params
 def crop_to_full_coords(params, crop_info, voxel_size):
     """Convert plane parameters from cropped to full image coordinates.
 

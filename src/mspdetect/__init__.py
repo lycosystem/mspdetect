@@ -16,6 +16,7 @@ from . import (
     geometry,
     io,
     losses,
+    metrics,
     msp_widget,
     optimization,
     pipeline,
@@ -35,4 +36,5 @@ __all__ = [
     "losses",
     "analysis",
     "DEFAULT_PARAMS",
+    "metrics",
 ]

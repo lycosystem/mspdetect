@@ -1,9 +1,7 @@
 """Module defining functions for preprocessing the CT images."""
 
-import os
 import time
 
-import joblib
 import numpy as np
 import scipy as sp
 from loguru import logger
@@ -275,8 +273,13 @@ def crop_patient_volumes(
     fixed_size=None,
     exclude_mandible=False,
     crop_shoulders=None,
+    interp_pad_z=None,
 ):
     """Crop patient volumes along primary and optional secondary axes."""
+    # Set default padding values
+    if interp_pad_z is None:
+        interp_pad_z = 10
+
     original_image = struct_dict["Image"][0]
 
     # Determine and apply z-axis cropping around reference
@@ -302,7 +305,7 @@ def crop_patient_volumes(
     interpolation_image, z_pad = _create_interpolation_image(
         original_image,
         z_bounds,
-        interp_pad=10,
+        interp_pad=interp_pad_z,
     )
 
     # collect crop information
@@ -316,7 +319,7 @@ def crop_patient_volumes(
             struct_dict,
             crop_shoulders["axis"],
             crop_shoulders["max_extent_mm"],
-            reference,
+            crop_shoulders["reference"],
         )
 
         struct_dict_cropped = _crop_structures_along_axis(
@@ -326,11 +329,16 @@ def crop_patient_volumes(
             shoulder_bounds["end"],
         )
 
+        if crop_shoulders.get("interp_pad", None) is None:
+            interp_pad_shoulder = 10
+        else:
+            interp_pad_shoulder = crop_shoulders["interp_pad"]
+
         # add padding also for the shoulder bounds
         interpolation_image, shoulder_pad = _create_interpolation_image(
             interpolation_image,
             shoulder_bounds,
-            interp_pad=10,
+            interp_pad=interp_pad_shoulder,
         )
 
         crop_info["shoulder_axis"] = {
@@ -408,8 +416,8 @@ def get_cached_interpolator(
         where z_mm_shifted = 0 at the first slice *after* the pad.
 
     """
-    os.makedirs(output_dir, exist_ok=True)
-    interpolator_path = os.path.join(output_dir, filename)
+    # os.makedirs(output_dir, exist_ok=True)
+    # interpolator_path = os.path.join(output_dir, filename)
 
     # Initialise physical-space sample grids without padding
     grids = [np.arange(image.shape[i]) * voxel_size[i] for i in range(3)]
@@ -421,21 +429,24 @@ def get_cached_interpolator(
         # Shift so that first unpadded slice is at 0
         grids[axis] = (np.arange(image.shape[axis]) - pad) * voxel_size[axis]
 
-    if os.path.exists(interpolator_path):
-        interpolator = joblib.load(interpolator_path)
-    else:
-        start = time.time()
-        interpolator = sp.interpolate.RegularGridInterpolator(
-            tuple(grids),
-            image,
-            method=method,
-            bounds_error=False,
-            fill_value=None,
-        )
-        elapsed = time.time() - start
-        logger.info(
-            f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}",
-        )
-        joblib.dump(interpolator, interpolator_path)
+    # if os.path.exists(interpolator_path):
+    #     interpolator = joblib.load(interpolator_path)
+    # else:
+    start = time.time()
+    interpolator = sp.interpolate.RegularGridInterpolator(
+        tuple(grids),
+        image,
+        method=method,
+        bounds_error=False,
+        fill_value=None,
+    )
+    elapsed = time.time() - start
+    logger.info(
+        f"Interpolator built in {elapsed:.2f}s.",
+    )
+    # logger.info(
+    #     f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}",
+    # )
+    # joblib.dump(interpolator, interpolator_path)
 
     return interpolator

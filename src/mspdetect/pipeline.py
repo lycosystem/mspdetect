@@ -1,7 +1,11 @@
 """This module defines the pipeline for detecting the MSP of many CT images."""
 
+import functools
+import gc
 import os
+import re
 import time
+from multiprocessing import Pool
 from typing import Any
 
 import numpy as np
@@ -37,7 +41,7 @@ def _get_patient_folders(
         return [str(patient)]
 
 
-def generate_output_directory_name(base_name, pipeline_config, opt_config):
+def generate_output_directory_name(base_name, patient, pipeline_config, opt_config):
     """Generate output directory name encoding all parameters.
 
     Parameters
@@ -107,6 +111,11 @@ def generate_output_directory_name(base_name, pipeline_config, opt_config):
     init_steps = opt_config.get("initialization_steps", "grid")
     components.append(f"init{init_steps}")
 
+    if patient and isinstance(patient, str):
+        match = re.search(r"patients_(.+?)\.txt", patient)
+        if match:
+            components.append(match.group(1))
+
     return "_".join(components)
 
 
@@ -150,6 +159,7 @@ def _run_preprocessing_pipeline(
         fixed_size=pipeline_config["fixed_size"],
         exclude_mandible=pipeline_config.get("exclude_mandible", False),
         crop_shoulders=pipeline_config.get("crop_shoulders", None),
+        interp_pad_z=pipeline_config.get("interp_pad_z", None),
     )
 
     # Preprocess bone image
@@ -308,7 +318,47 @@ def process_single_patient(
             visualization_config,
         )
 
+    # explicitly delete processed data
+    del processed_data["interpolator"]
+    del processed_data
+
+    # Clear matplotlib caches to prevent memory accumulation
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    # Clear font cache which accumulates from GIF generation
+    try:
+        from matplotlib import font_manager
+
+        font_manager._get_font.cache_clear()  # Clear font lookup cache
+    except:
+        pass
+
+    gc.collect()
+
     return optimization_results
+
+
+def _process_patient_wrapper(
+    folder: str,
+    base_path: str,
+    output_path: str,
+    pipeline_config: dict,
+    optimization_config: dict,
+    visualization_config: dict,
+) -> None:
+    """Wrapper for multiprocessing."""
+    logger.info(f"Processing patient: {folder}")
+    try:
+        process_single_patient(
+            folder_path=os.path.join(base_path, folder),
+            output_path=os.path.join(output_path, folder),
+            pipeline_config=pipeline_config,
+            optimization_config=optimization_config,
+            visualization_config=visualization_config,
+        )
+    except Exception as e:
+        logger.error(f"Error processing {folder}: {e}")
 
 
 def run_msp_pipeline(
@@ -327,7 +377,9 @@ def run_msp_pipeline(
 
     # Extract configuration sections
     base_path = config["base_path"]
-    # output_path = config["output_path"]
+    result_path = config.get("output_path")
+    if result_path is None:
+        result_path = base_path
     patient = config["patient"]
 
     pipeline_config = config["pipeline"]
@@ -335,36 +387,67 @@ def run_msp_pipeline(
     visualization_config = config["visualization"]
 
     output_path = generate_output_directory_name(
-        base_path,
+        result_path,
+        patient,
         pipeline_config,
         optimization_config,
     )
     start_time = time.time()
-    results = {"parameters": [], "objective_values": []}
+    # results = {"parameters": [], "objective_values": []}
 
     # Get patient folders
     folders = _get_patient_folders(base_path, patient)
 
-    for folder in tqdm.tqdm(folders, desc="Processing CTs"):
-        logger.info(f"Processing patient: {folder}")
+    # Get number of processes from config
+    # num_processes = config.get("num_processes", os.cpu_count() - 1)
+    num_processes = 8
 
-        patient_results = process_single_patient(
-            folder_path=os.path.join(base_path, folder),
-            output_path=os.path.join(output_path, folder),
-            pipeline_config=pipeline_config,
-            optimization_config=optimization_config,
-            visualization_config=visualization_config,
-        )
+    # Create partial function
+    process_func = functools.partial(
+        _process_patient_wrapper,
+        base_path=base_path,
+        output_path=output_path,
+        pipeline_config=pipeline_config,
+        optimization_config=optimization_config,
+        visualization_config=visualization_config,
+    )
 
-        if patient_results:
-            results["parameters"].append(patient_results["parameters"])
-            results["objective_values"].append(patient_results["objective_value"])
+    # Process in parallel
+    if num_processes == 1:
+        # Sequential processing (useful for debugging/visualization)
+        for folder in tqdm.tqdm(folders, desc="Processing CTs"):
+            process_func(folder)
+    else:
+        # Parallel processing
+        with Pool(processes=num_processes) as pool:
+            list(
+                tqdm.tqdm(
+                    pool.imap(process_func, folders),
+                    total=len(folders),
+                    desc="Processing CTs",
+                )
+            )
+
+    # for folder in tqdm.tqdm(folders, desc="Processing CTs"):
+    #     logger.info(f"Processing patient: {folder}")
+
+    #     patient_results = process_single_patient(
+    #         folder_path=os.path.join(base_path, folder),
+    #         output_path=os.path.join(output_path, folder),
+    #         pipeline_config=pipeline_config,
+    #         optimization_config=optimization_config,
+    #         visualization_config=visualization_config,
+    #     )
+
+    #     if patient_results:
+    #         results["parameters"].append(patient_results["parameters"])
+    #         results["objective_values"].append(patient_results["objective_value"])
 
     end_time = time.time()
     duration = end_time - start_time
 
     # Save batch results
-    _save_batch_results(output_path, results)
+    # _save_batch_results(output_path, results)
     logger.info(
         f"Pipeline completed for {len(folders)} patient(s) in {duration:.2f} seconds.",
     )

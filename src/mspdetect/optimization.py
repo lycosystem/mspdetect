@@ -315,19 +315,19 @@ def parameter_initialization(
 
     # 5) Optional: plot heatmap of MSE over (θ, φ)
     mse_grid = mse_array.reshape(initialization_steps, initialization_steps)
-    visualization.plot_mse_heatmap(
-        azimuthal_angles,
-        polar_angles,
-        mse_grid,
-        title=(
-            f"MSE Heatmap (θ, φ) – optimum at:\n"
-            f"θ={np.rad2deg(best_params[0]):.2f}°, "
-            f"φ={np.rad2deg(best_params[1]):.2f}°, "
-            f"L={best_params[2]:.2f}\n"
-            f"MSE={mse_grid.flat[best_idx]:.2f}"
-        ),
-        output_path=output_path,
-    )
+    # visualization.plot_mse_heatmap(
+    #     azimuthal_angles,
+    #     polar_angles,
+    #     mse_grid,
+    #     title=(
+    #         f"MSE Heatmap (θ, φ) – optimum at:\n"
+    #         f"θ={np.rad2deg(best_params[0]):.2f}°, "
+    #         f"φ={np.rad2deg(best_params[1]):.2f}°, "
+    #         f"L={best_params[2]:.2f}\n"
+    #         f"MSE={mse_grid.flat[best_idx]:.2f}"
+    #     ),
+    #     output_path=output_path,
+    # )
     logger.info(
         f"Best estimate of initial plane parameters: θ = {np.rad2deg(best_params[0]):.2f}°, φ = {np.rad2deg(best_params[1]):.2f}°, L = {best_params[2]:.2f}",
     )
@@ -1058,18 +1058,18 @@ def run_or_load_optimization(
         )
 
         # visualization with the cropped image
-        visualization.make_plane_gif(
-            image,
-            voxel_size_image,
-            params_arr,
-            obj_arr,
-            output_path_patient,
-        )
-        visualization.make_optimization_gif(
-            obj_arr,
-            output_path_patient,
-            title="Optimization of Objective Function",
-        )
+        # visualization.make_plane_gif(
+        #     image,
+        #     voxel_size_image,
+        #     params_arr,
+        #     obj_arr,
+        #     output_path_patient,
+        # )
+        # visualization.make_optimization_gif(
+        #     obj_arr,
+        #     output_path_patient,
+        #     title="Optimization of Objective Function",
+        # )
     else:
         start = time.time()
         res = optimize_plane(
@@ -1092,19 +1092,19 @@ def run_or_load_optimization(
             f"with MSE {optimized_objective_value:.2f}",
         )
 
-        # visualization with the cropped image
-        visualization.make_plane_gif(
-            image,
-            voxel_size_image,
-            np.array(res.params_list),
-            np.array(res.objective_value_list),
-            output_path_patient,
-        )
-        visualization.make_optimization_gif(
-            np.array(res.objective_value_list),
-            output_path_patient,
-            title="Optimization of Objective Function",
-        )
+        # # visualization with the cropped image
+        # visualization.make_plane_gif(
+        #     image,
+        #     voxel_size_image,
+        #     np.array(res.params_list),
+        #     np.array(res.objective_value_list),
+        #     output_path_patient,
+        # )
+        # visualization.make_optimization_gif(
+        #     np.array(res.objective_value_list),
+        #     output_path_patient,
+        #     title="Optimization of Objective Function",
+        # )
 
         params_cropped = np.array(res.params_list)
         np.save(param_path_cropped, params_cropped)

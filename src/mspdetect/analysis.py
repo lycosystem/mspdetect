@@ -1,4 +1,7 @@
+import functools
 import os
+from multiprocessing import Pool
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -156,9 +159,38 @@ def calculate_volumes_for_patient(
     return volumes
 
 
+def _process_patient_wrapper(
+    folder,
+    base_path,
+    output_path,
+    pipeline_config,
+    structure_names,
+    crop_range,
+    crop_reference,
+    crop_margin,
+    crop_slice,
+):
+    """Wrapper for multiprocessing."""
+    try:
+        patient_result = calculate_volumes_for_patient(
+            patient_path=os.path.join(base_path, folder),
+            result_path=os.path.join(output_path, folder),
+            pipeline_config=pipeline_config,
+            structures=structure_names,
+            crop_range=crop_range,
+            crop_reference=crop_reference,
+            crop_margin=crop_margin,
+            crop_slice=crop_slice,
+        )
+        return (folder, patient_result)
+    except Exception as e:
+        logger.error(f"Error processing {folder}: {e}")
+        return (folder, None)
+
+
 def pipeline_volumes_computation(
     config_path: str | None,
-    # results_path: Path,
+    results_path: Path | None,
     structure_names: list[str] | None = ["Mandible", "Spinal Cord", "Body"],
     crop_range: tuple | None = None,
     crop_reference: str | None = "GTVp",
@@ -185,32 +217,69 @@ def pipeline_volumes_computation(
 
     pipeline_config = config["pipeline"]
     optimization_config = config["optimization"]
-    output_path = msp.pipeline.generate_output_directory_name(
-        base_path,
-        pipeline_config,
-        optimization_config,
-    )
+
+    if results_path is None:
+        output_path = msp.pipeline.generate_output_directory_name(
+            base_path,
+            patient,
+            pipeline_config,
+            optimization_config,
+        )
+    else:
+        output_path = results_path
 
     folders = msp.pipeline._get_patient_folders(base_path, patient)
 
     volumes = {}
 
-    for folder in tqdm.tqdm(folders, desc="Patient Volumes"):
-        folder_path = os.path.join(base_path, folder)
-        result_path = os.path.join(output_path, folder)
+    num_processes = 6
 
-        patient_result = calculate_volumes_for_patient(
-            folder_path,
-            result_path,
-            pipeline_config,
-            structure_names,
-            crop_range,
-            crop_reference,
-            crop_margin,
-            crop_slice,
-        )
-        if patient_result:
-            volumes[folder] = patient_result
+    process_func = functools.partial(
+        _process_patient_wrapper,
+        base_path=base_path,
+        output_path=output_path,
+        pipeline_config=pipeline_config,
+        structure_names=structure_names,
+        crop_range=crop_range,
+        crop_reference=crop_reference,
+        crop_margin=crop_margin,
+        crop_slice=crop_slice,
+    )
+
+    if num_processes == 1:
+        for folder in tqdm.tqdm(folders, desc="Calculate volumes"):
+            folder_name, result = process_func(folder)
+            if result is not None:
+                volumes[folder_name] = result
+    else:
+        with Pool(processes=num_processes) as pool:
+            results = list(
+                tqdm.tqdm(
+                    pool.imap(process_func, folders),
+                    total=len(folders),
+                    desc="Calculate volumes",
+                )
+            )
+
+        for folder_name, result in results:
+            if result is not None:
+                volumes[folder_name] = result
+    # for folder in tqdm.tqdm(folders, desc="Patient Volumes"):
+    #     folder_path = os.path.join(base_path, folder)
+    #     result_path = os.path.join(output_path, folder)
+
+    #     patient_result = calculate_volumes_for_patient(
+    #         folder_path,
+    #         result_path,
+    #         pipeline_config,
+    #         structure_names,
+    #         crop_range,
+    #         crop_reference,
+    #         crop_margin,
+    #         crop_slice,
+    #     )
+    #     if patient_result:
+    #         volumes[folder] = patient_result
 
     # Create DataFrame with columns
     df_volumes = pd.DataFrame.from_dict(volumes, orient="index")
