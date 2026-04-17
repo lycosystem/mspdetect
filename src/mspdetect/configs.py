@@ -8,39 +8,21 @@ but they also help with programmatically validating and constructing various obj
 
 from __future__ import annotations
 
-import importlib
-import importlib.util
-import os
-import warnings
-from collections.abc import Callable, Sequence
-from copy import deepcopy
-from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Literal
 
-import numpy as np
-import pandas as pd
-import yaml
-from loguru import logger
 from pydantic import (
-    AfterValidator,
     BaseModel,
-    ConfigDict,
+    DirectoryPath,
     Field,
     FilePath,
-    DirectoryPath
 )
-from pydantic_settings import (
-    BaseSettings,
-    PydanticBaseSettingsSource,
-    YamlConfigSettingsSource,
-)
-from pydantic_settings.sources import DEFAULT_PATH
+
 
 class DataConfig(BaseModel):
     """Where to load the CT images from and what structures to extract."""
 
     source: DirectoryPath = Field(
-        "Path to the directory where the CT images are stored."
+        "Path to the directory where the CT images are stored.",
     )
     patients: str | FilePath = Field(
         defaults=None,
@@ -49,28 +31,31 @@ class DataConfig(BaseModel):
             "to a txt file containing a list of patients."
         ),
     )
-    mapping: dict[str | Literal["Image", "GTVp", "Mandible", "Spinal Cord"]] | None = Field(
-        default=None,
-        description=(
-            "Mapping which maps names of dataset structure names"
-            " to standard ones."
-        ),
+    mapping: dict[str | Literal["Image", "GTVp", "Mandible", "Spinal Cord"]] | None = (
+        Field(
+            default=None,
+            description=(
+                "Mapping which maps names of dataset structure names to standard ones."
+            ),
+        )
     )
+
 
 class CropConfigBase(BaseModel):
     enabled: bool = Field(
         defaults=None,
-        description="Enable cropping or not."
+        description="Enable cropping or not.",
     )
     axis: int = Field(
-        description="Axis to slice along."
+        description="Axis to slice along.",
     )
     reference_structure: Literal["GTVp", "Mandible", "Body"] = Field(
-        description="Reference to use for cropping."
+        description="Reference to use for cropping.",
     )
     pad: int = Field(
-        description="Padding to add for interpolator."
+        description="Padding to add for interpolator.",
     )
+
 
 class ZCropConfig(CropConfigBase):
     mode: Literal["margins", "fixed_size"] = Field(
@@ -83,20 +68,18 @@ class ZCropConfig(CropConfigBase):
         ),
     )
     size: int = Field(
-        description="Number of voxels of the cropping window."
+        description="Number of voxels of the cropping window.",
     )
     margins: int | list[int] = Field(
         description=(
             "Margins to add around the reference structures. "
             "If just an integer it is symmetrically applied, otherwise "
             "the first one is applied below and the other at the top."
-        )
+        ),
     )
+
 
 class XCropConfig(CropConfigBase):
     size: int = Field(
-        description=(
-            "Number of voxels to add around center of mass."
-        )
+        description=("Number of voxels to add around center of mass."),
     )
-
