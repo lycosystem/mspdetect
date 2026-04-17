@@ -25,6 +25,8 @@ dependencies = [
     "loguru",
     "tqdm",
     "pyyaml",
+    "pydantic",
+    "pydantic-settings",
 ]
 dynamic = ["version"]
 
