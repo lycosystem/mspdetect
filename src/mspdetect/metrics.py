@@ -142,7 +142,10 @@ def calculate_metrics_for_patient(
     #     )
 
     params = load_patient_plane_params(
-        result_path, struct_dict, pipeline_config, voxel_size
+        result_path,
+        struct_dict,
+        pipeline_config,
+        voxel_size,
     )
 
     logger.info(f"loaded params {params}")
@@ -239,11 +242,11 @@ def pipeline_metrics_computation(
 
     if base_path is None:
         base_path = Path(
-            "/home/noemibuhrer/Datasets/RADCURE/DATASETS_NII"
+            "/home/noemibuhrer/Datasets/RADCURE/DATASETS_NII",
         )  # Update this to your actual base path
     if output_path is None:
         output_path = Path(
-            "/home/noemibuhrer/Datasets/RADCURE/msp_results/final"
+            "/home/noemibuhrer/Datasets/RADCURE/msp_results/final",
         )  # Directory where files will be organized
     result_dict = {}
     num_processes = 4
@@ -277,7 +280,9 @@ def pipeline_metrics_computation(
     #     result_dict[patient_id] = multilevel_dict
     if num_processes == 1:
         for row_iter in tqdm(
-            log_csv.iterrows(), total=len(log_csv), desc="Extract metrics"
+            log_csv.iterrows(),
+            total=len(log_csv),
+            desc="Extract metrics",
         ):
             patient, patient_dict = process_func(row_iter)
             if patient_dict:
@@ -298,7 +303,7 @@ def pipeline_metrics_computation(
                     pool.imap(process_func, log_csv.iterrows()),
                     total=len(log_csv),
                     desc="Extract metrics",
-                )
+                ),
             )
 
         for patient, patient_dict in results:
@@ -319,5 +324,8 @@ def pipeline_metrics_computation(
         df.columns,
     )
     # save csv
-    # df.to_csv('/home/noemibuhrer/Projects/RADCURE-analysis/msp_pipeline/logs/metrics.csv', index=False)
+    df.to_csv(
+        "/home/noemibuhrer/Projects/RADCURE-analysis/msp_pipeline/logs/metrics.csv",
+        index=False,
+    )
     df.to_csv(result_path, index=False)

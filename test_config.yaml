@@ -1,0 +1,44 @@
+base_path: /home/noemibuhrer/Datasets/RADCURE/test
+optimization:
+  azimuthal:
+  - 0
+  - 15
+  initialization_steps: 10
+  polar:
+  - 90
+  - 15
+overwrite: true
+output_path: /home/noemibuhrer/Datasets/RADCURE/test/results/
+patient: null
+pipeline:
+  HU_range:
+  - 300
+  - 2800
+  check_full_anatomy: false
+  crop_mode: fixed_size
+  exclude_mandible: true
+  fixed_size: 20
+  interp_pad_z: 15
+  margins: None
+  reference: GTVp
+  slice_axis: 2
+  slice_range: null
+  structure_name_mapping:
+    CT: Image
+    ROI__[EXTERNAL]: Body
+    ROI__[Eye_L]: Eye_L
+    ROI__[Eye_R]: Eye_R
+    ROI__[GTVp]: GTVp
+    ROI__[Larynx]: Larynx
+    ROI__[Lips]: Lips
+    ROI__[Mandible_Bone]: Mandible
+    ROI__[SpinalCord]: Spinal Cord
+  structure_names:
+  - Image
+  - GTVp
+  - Spinal Cord
+  - Mandible
+  - Body
+visualization:
+  parameter_tweaking: false
+  verification_widget: false

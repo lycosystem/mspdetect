@@ -382,6 +382,8 @@ def run_msp_pipeline(
         result_path = base_path
     patient = config["patient"]
 
+    overwrite = config.get("overwrite", False)
+
     pipeline_config = config["pipeline"]
     optimization_config = config["optimization"]
     visualization_config = config["visualization"]
@@ -397,6 +399,17 @@ def run_msp_pipeline(
 
     # Get patient folders
     folders = _get_patient_folders(base_path, patient)
+
+    if not overwrite:
+        initial_count = len(folders)
+        folders = [
+            f for f in folders if not os.path.exists(os.path.join(output_path, f))
+        ]
+        logger.info(
+            f"Skipping {initial_count - len(folders)} already processed patients"
+        )
+    else:
+        logger.info("Overwrite enabled: processing all patients.")
 
     # Get number of processes from config
     # num_processes = config.get("num_processes", os.cpu_count() - 1)
@@ -425,7 +438,7 @@ def run_msp_pipeline(
                     pool.imap(process_func, folders),
                     total=len(folders),
                     desc="Processing CTs",
-                )
+                ),
             )
 
     # for folder in tqdm.tqdm(folders, desc="Processing CTs"):
