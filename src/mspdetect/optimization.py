@@ -91,7 +91,14 @@ def compute_delta(diff, dim, tol=1e-6, max_iter=100):
     return 0.5 * (low + high)
 
 
-def compute_objective(params_array, bone, interpolator_intensity, voxel_size, delta):
+def compute_objective(
+    params_array,
+    bone,
+    interpolator_intensity,
+    voxel_size,
+    method,
+    delta=None,
+):
     """Compute the objective function value for plane symmetry optimization.
 
     Parameters
@@ -104,6 +111,8 @@ def compute_objective(params_array, bone, interpolator_intensity, voxel_size, de
         Interpolator for the original image.
     voxel_size : array-like of shape (3,)
         Physical voxel size for each axis.
+    method : str
+        Which loss function to use.
     delta : float
         Huber loss delta parameter.
 
@@ -128,13 +137,16 @@ def compute_objective(params_array, bone, interpolator_intensity, voxel_size, de
 
     # f = np.sum(piecewise_intensity_loss(I_orig, I_m)).mean()
 
-    # f= np.sum(quadratic_loss_function(diff)).mean()
+    if method == "MSE":
+        f = np.sum(quadratic_loss(diff)).mean()
 
     # # 5) estimate δ via truncated-moment
     # dim = params_array.size
     # delta_adapt = compute_delta(diff, dim)
-
-    f = np.sum(huber_loss(diff, delta=delta)).mean()
+    if method == "huber":
+        if delta is None:
+            raise ValueError("Delta parameter must be specified!")
+        f = np.sum(huber_loss(diff, delta=delta)).mean()
 
     # f = np.sum(welsch_loss(diff, c=delta)).mean()  # Using Welsch loss instead of Huber
     # f = np.sum(p_huber_loss(diff, c=delta, p=1)).mean()  # Using generalized Huber loss
@@ -309,9 +321,13 @@ def parameter_initialization(
         )
 
     # 4) Select best parameters from saved results
-    best_idx = np.argmin(mse_array)
-    best_params = planes[best_idx]  # [azimuthal, polar, L]
-    best_delta = delta_array[best_idx]
+    # new: select 10 best parameters!
+    sorted_mse_idx = np.argsort(mse_array)
+    best_params = planes[sorted_mse_idx][:10]
+    best_delta = delta_array[sorted_mse_idx][:10]
+    # best_idx = np.argmin(mse_array)
+    # best_params = planes[best_idx]  # [azimuthal, polar, L]
+    # best_delta = delta_array[best_idx]
 
     # 5) Optional: plot heatmap of MSE over (θ, φ)
     mse_grid = mse_array.reshape(initialization_steps, initialization_steps)
@@ -329,7 +345,7 @@ def parameter_initialization(
     #     output_path=output_path,
     # )
     logger.info(
-        f"Best estimate of initial plane parameters: θ = {np.rad2deg(best_params[0]):.2f}°, φ = {np.rad2deg(best_params[1]):.2f}°, L = {best_params[2]:.2f}",
+        f"Best estimate of initial plane parameters: θ = {np.rad2deg(best_params[-1][0]):.2f}°, φ = {np.rad2deg(best_params[-1][1]):.2f}°, L = {best_params[-1][2]:.2f}",
     )
 
     # z_slice = int(round(com_vox[0]))  # axial index through the COM
@@ -382,25 +398,45 @@ def optimize_plane(
 
     """
     objective_value_list = []
+    mse_value_list = []
     params_list = []
 
     def callback(xk):
-        f_val = compute_objective(xk, image, interpolator_intensity, voxel_size, delta)
+        f_val = compute_objective(
+            xk,
+            image,
+            interpolator_intensity,
+            voxel_size,
+            "huber",
+            delta,
+        )
         objective_value_list.append(f_val)
+        mse_val = compute_objective(
+            xk,
+            image,
+            interpolator_intensity,
+            voxel_size,
+            "MSE",
+        )
+        mse_value_list.append(mse_val)
         params_list.append(xk.copy())
 
     res = sp.optimize.minimize(
         compute_objective,
         x0=initial_params_array,
-        args=(image, interpolator_intensity, voxel_size, delta),
+        args=(image, interpolator_intensity, voxel_size, "huber", delta),
         method="BFGS",
         jac=None,
         callback=callback,
     )
     params_list.append(res.x.copy())
     objective_value_list.append(res.fun)
+    mse_value_list.append(
+        compute_objective(res.x, image, interpolator_intensity, voxel_size, "MSE"),
+    )
 
     res.objective_value_list = objective_value_list
+    res.mse_value_list = mse_value_list
     res.params_list = params_list
 
     return res
@@ -1037,6 +1073,7 @@ def run_or_load_optimization(
         "optimized_parameter_full_image.npy",
     )
     obj_path = os.path.join(output_path_patient, "objective_value_array.npy")
+    mse_path = os.path.join(output_path_patient, "mse_value_array.npy")
     crop_info_path = os.path.join(output_path_patient, "crop_info.npy")
 
     image = processed_data["image"]
@@ -1110,6 +1147,7 @@ def run_or_load_optimization(
         np.save(param_path_cropped, params_cropped)
 
         np.save(obj_path, np.array(res.objective_value_list))
+        np.save(mse_path, np.array(res.mse_value_list))
 
         optimized_parameter_full = geometry.crop_to_full_coords(
             optimized_parameters,

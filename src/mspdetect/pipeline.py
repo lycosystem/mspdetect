@@ -206,18 +206,26 @@ def _run_optimization_pipeline(
         initialization_steps=optimization_config["initialization_steps"],
     )
 
-    # Run optimization
-    optimized_parameters, optimized_objective_values = (
-        optimization.run_or_load_optimization(
+    for i, (plane_val, delta_val) in enumerate(zip(initial_plane, delta, strict=False)):
+        # Run optimization
+        output_path_start = os.path.join(
             output_path,
-            processed_data,
-            voxel_size,
-            delta,
-            initial_plane,
-            [],  # optimized_parameter_list
-            [],  # optimized_objective_value_list
+            f"{i:02d}",
         )
-    )
+        if not os.path.exists(output_path_start):
+            os.makedirs(output_path_start)
+
+        optimized_parameters, optimized_objective_values = (
+            optimization.run_or_load_optimization(
+                output_path_start,
+                processed_data,
+                voxel_size,
+                delta_val,
+                plane_val,
+                [],  # optimized_parameter_list
+                [],  # optimized_objective_value_list
+            )
+        )
 
     return {
         "parameters": optimized_parameters,
@@ -406,7 +414,7 @@ def run_msp_pipeline(
             f for f in folders if not os.path.exists(os.path.join(output_path, f))
         ]
         logger.info(
-            f"Skipping {initial_count - len(folders)} already processed patients"
+            f"Skipping {initial_count - len(folders)} already processed patients",
         )
     else:
         logger.info("Overwrite enabled: processing all patients.")

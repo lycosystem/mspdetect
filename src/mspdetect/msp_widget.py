@@ -148,7 +148,18 @@ def display_scrollable_views(
     X_cor, Z_cor = np.meshgrid(x_mm, z_mm)  # for coronal view
 
     # colors
-    plane_colors = ["red", "purple", "cyan", "lime", "magenta"]
+    plane_colors = [
+        "red",
+        "purple",
+        "cyan",
+        "lime",
+        "magenta",
+        "dodgerblue",
+        "orange",
+        "peru",
+        "forestgreen",
+        "brown",
+    ]
     struct_names = [s for s in struct_dict if s != "Image"]
     cmap10 = plt.cm.get_cmap("tab10").colors
     color_cycle = {n: cmap10[i] for i, n in enumerate(struct_names)}
@@ -177,7 +188,11 @@ def display_scrollable_views(
                 sl = mask_cropped[:, :, z_index]
                 if sl.any():
                     ax0.contour(
-                        X_ax, Y_ax, sl, colors=[color_cycle[name]], linewidths=1
+                        X_ax,
+                        Y_ax,
+                        sl,
+                        colors=[color_cycle[name]],
+                        linewidths=1,
                     )
             if name == "Bones":
                 mask = _array(struct_dict[name])
@@ -279,7 +294,9 @@ def display_scrollable_views(
                 mask = _array(struct_dict[name])
                 mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
                 slm_full = mask_cropped[
-                    y_line, :, :
+                    y_line,
+                    :,
+                    :,
                 ].T  # Transpose for proper orientation
                 if slm_full.any():
                     ax1.contour(
@@ -294,7 +311,9 @@ def display_scrollable_views(
                 mask = _array(struct_dict[name])
                 mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
                 slm_full = mask_cropped[
-                    y_line, :, :
+                    y_line,
+                    :,
+                    :,
                 ].T  # Transpose for proper orientation
                 bone = slm_full > 0
                 bone_ma = np.ma.masked_where(~bone, bone.astype(float))
@@ -401,7 +420,8 @@ def scrollable_patient(
         for key, item in struct_dict.items():
             struct_dict_copy[key] = item[0]
         proc_image, bone_ct = msp.preprocessing.preprocess_bone_image(
-            struct_dict_copy, HU_range
+            struct_dict_copy,
+            HU_range,
         )
         struct_dict["Bones"] = bone_ct
 
