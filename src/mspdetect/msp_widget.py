@@ -6,6 +6,7 @@ import ipywidgets as widgets
 import matplotlib.pyplot as plt
 import numpy as np
 from loguru import logger
+from matplotlib.colors import ListedColormap
 from matplotlib.lines import Line2D
 
 import mspdetect as msp
@@ -16,6 +17,8 @@ def display_scrollable_views(
     voxel_size,
     plane_coeffs_list=None,
     optimization_methods_list=None,
+    shoulder_info=None,
+    hide_msp=False,
 ):
     """Display interactive axial and coronal views of the image and structures, with optional plane overlays.
 
@@ -29,6 +32,8 @@ def display_scrollable_views(
         List of plane parameter arrays to overlay.
     optimization_methods_list : list of str, optional
         List of method names for legend.
+    shoulder_info: dict
+        Dict about the shoulder cropping in order to add some lines.
 
     """
     if plane_coeffs_list is None:
@@ -43,6 +48,13 @@ def display_scrollable_views(
 
     H, W, D = image.shape
     sy, sx, sz = voxel_size
+
+    if shoulder_info is not None:
+        shoulder_axis = shoulder_info.get("axis")
+        shoulder_start = shoulder_info.get("start")
+        shoulder_end = shoulder_info.get("end")
+    else:
+        shoulder_axis = None
 
     # Calculate center of mass using the Body structure for cropping
     # Use Body structure if available, otherwise fallback to geometric center
@@ -136,7 +148,18 @@ def display_scrollable_views(
     X_cor, Z_cor = np.meshgrid(x_mm, z_mm)  # for coronal view
 
     # colors
-    plane_colors = ["red", "purple", "cyan", "lime", "magenta"]
+    plane_colors = [
+        "red",
+        "purple",
+        "cyan",
+        "lime",
+        "magenta",
+        "dodgerblue",
+        "orange",
+        "peru",
+        "forestgreen",
+        "brown",
+    ]
     struct_names = [s for s in struct_dict if s != "Image"]
     cmap10 = plt.cm.get_cmap("tab10").colors
     color_cycle = {n: cmap10[i] for i, n in enumerate(struct_names)}
@@ -158,41 +181,88 @@ def display_scrollable_views(
         ax0.axhline(y=y0, color="yellow", linestyle="--")
         # structure contours
         for name in struct_names:
-            mask = _array(struct_dict[name])
-            # Crop the structure mask to match the image cropping
-            mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
-            sl = mask_cropped[:, :, z_index]
-            if sl.any():
-                ax0.contour(X_ax, Y_ax, sl, colors=[color_cycle[name]], linewidths=1)
-        # planes
-        for i, (theta, phi, L) in enumerate(plane_coeffs_list):
-            nx = np.sin(phi) * np.cos(theta)
-            ny = np.sin(phi) * np.sin(theta)
-            nz = np.cos(phi)
-            C = L - nz * (z_index * sz)
-            F = nx * X_ax + ny * Y_ax - C
-            ax0.contour(
-                X_ax,
-                Y_ax,
-                F,
-                levels=[0],
-                colors=[plane_colors[i % len(plane_colors)]],
-                linewidths=1,
-            )
+            if name != "Bones":
+                mask = _array(struct_dict[name])
+                # Crop the structure mask to match the image cropping
+                mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
+                sl = mask_cropped[:, :, z_index]
+                if sl.any():
+                    ax0.contour(
+                        X_ax,
+                        Y_ax,
+                        sl,
+                        colors=[color_cycle[name]],
+                        linewidths=1,
+                    )
+            if name == "Bones":
+                mask = _array(struct_dict[name])
+                # Crop the structure mask to match the image cropping
+                mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
+                sl = mask_cropped[:, :, z_index]
+                if sl.any():
+                    bone = sl > 0
+                    bone_ma = np.ma.masked_where(~bone, bone.astype(float))
+                    bone_cmap = ListedColormap([color_cycle["Bones"]])
+                    bone_cmap.set_bad((0, 0, 0, 0))
+                    ax0.imshow(
+                        bone_ma,
+                        cmap=bone_cmap,
+                        extent=[x_mm[0], x_mm[-1], y_mm[-1], y_mm[0]],
+                        alpha=0.8,
+                        interpolation="nearest",
+                        vmin=0,
+                        vmax=1,
+                    )
+        if not hide_msp:
+            # planes
+            for i, (theta, phi, L) in enumerate(plane_coeffs_list):
+                nx = np.sin(phi) * np.cos(theta)
+                ny = np.sin(phi) * np.sin(theta)
+                nz = np.cos(phi)
+                C = L - nz * (z_index * sz)
+                F = nx * X_ax + ny * Y_ax - C
+                ax0.contour(
+                    X_ax,
+                    Y_ax,
+                    F,
+                    levels=[0],
+                    colors=[plane_colors[i % len(plane_colors)]],
+                    linewidths=1,
+                )
         # legend
         handles = []
         for n in struct_names:
             handles.append(Line2D([0], [0], color=color_cycle[n], lw=2, label=n))
-        for i, method in enumerate(optimization_methods_list):
-            handles.append(
-                Line2D(
-                    [0],
-                    [0],
-                    color=plane_colors[i % len(plane_colors)],
-                    lw=2,
-                    label=method,
-                ),
-            )
+        if not hide_msp:
+            for i, method in enumerate(optimization_methods_list):
+                handles.append(
+                    Line2D(
+                        [0],
+                        [0],
+                        color=plane_colors[i % len(plane_colors)],
+                        lw=2,
+                        label=method,
+                    ),
+                )
+
+        if shoulder_axis is not None:
+            if shoulder_axis == 0:  # Y-axis
+                ax0.axhline(
+                    y=shoulder_start * sy,
+                    color="green",
+                    linestyle="--",
+                    label="Shoulder crop",
+                )
+                ax0.axhline(y=shoulder_end * sy, color="green", linestyle="--")
+            elif shoulder_axis == 1:  # X-axis
+                ax0.axvline(
+                    x=shoulder_start * sx,
+                    color="green",
+                    linestyle="--",
+                    label="Shoulder crop",
+                )
+                ax0.axvline(x=shoulder_end * sx, color="green", linestyle="--")
+
         ax0.legend(handles=handles, loc="upper right")
 
         # --- Coronal View ---
@@ -220,33 +290,82 @@ def display_scrollable_views(
 
         # Overlay structure contours (using same coordinate system as axial)
         for name in struct_names:
-            mask = _array(struct_dict[name])
-            mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
-            slm_full = mask_cropped[y_line, :, :].T  # Transpose for proper orientation
-            if slm_full.any():
+            if name != "Bones":
+                mask = _array(struct_dict[name])
+                mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
+                slm_full = mask_cropped[
+                    y_line,
+                    :,
+                    :,
+                ].T  # Transpose for proper orientation
+                if slm_full.any():
+                    ax1.contour(
+                        X_cor,
+                        Z_cor,
+                        slm_full,
+                        colors=[color_cycle[name]],
+                        linewidths=1,
+                    )
+
+            if name == "Bones":
+                mask = _array(struct_dict[name])
+                mask_cropped = mask[y_start:y_end, x_start:x_end, z_start:z_end]
+                slm_full = mask_cropped[
+                    y_line,
+                    :,
+                    :,
+                ].T  # Transpose for proper orientation
+                bone = slm_full > 0
+                bone_ma = np.ma.masked_where(~bone, bone.astype(float))
+                # One-color colormap for bones
+                bone_cmap = ListedColormap([color_cycle["Bones"]])
+                bone_cmap.set_bad((0, 0, 0, 0))  # transparent for masked pixels
+
+                if slm_full.any():
+                    # ax1.contourf(
+                    #     X_cor,
+                    #     Z_cor,
+                    #     slm_full.astype(float),
+                    #     levels=[1],
+                    #     colors=[color_cycle[name]],
+                    #     alpha=0.25,
+                    # )
+                    ax1.imshow(
+                        bone_ma,
+                        cmap=bone_cmap,
+                        origin="lower",
+                        extent=[x_mm[0], x_mm[-1], z_mm[0], z_mm[-1]],
+                        alpha=0.8,
+                        interpolation="nearest",
+                        vmin=0,
+                        vmax=1,
+                    )
+
+        # Overlay plane intersections (using same coordinate system as axial)
+        if not hide_msp:
+            y_phys = (y_line + y_start) * sy
+            for i, (theta, phi, L) in enumerate(plane_coeffs_list):
+                nx = np.sin(phi) * np.cos(theta)
+                ny = np.sin(phi) * np.sin(theta)
+                nz = np.cos(phi)
+                F = nx * X_cor + ny * y_phys + nz * Z_cor - L
                 ax1.contour(
                     X_cor,
                     Z_cor,
-                    slm_full,
-                    colors=[color_cycle[name]],
+                    F,
+                    levels=[0],
+                    colors=[plane_colors[i % len(plane_colors)]],
                     linewidths=1,
                 )
 
-        # Overlay plane intersections (using same coordinate system as axial)
-        y_phys = (y_line + y_start) * sy
-        for i, (theta, phi, L) in enumerate(plane_coeffs_list):
-            nx = np.sin(phi) * np.cos(theta)
-            ny = np.sin(phi) * np.sin(theta)
-            nz = np.cos(phi)
-            F = nx * X_cor + ny * y_phys + nz * Z_cor - L
-            ax1.contour(
-                X_cor,
-                Z_cor,
-                F,
-                levels=[0],
-                colors=[plane_colors[i % len(plane_colors)]],
-                linewidths=1,
+        if shoulder_axis == 1:  # X-axis
+            ax1.axvline(
+                x=shoulder_start * sx,
+                color="green",
+                linestyle="--",
+                label="Shoulder crop",
             )
+            ax1.axvline(x=shoulder_end * sx, color="green", linestyle="--")
 
         plt.show()
 
@@ -280,6 +399,121 @@ def scrollable_patient(
     crop_margin: int | None = 0,
     crop_mode: str | None = "margins",
     fixed_size: int | None = None,
+    hide_msp: bool | None = False,
+    show_bone: bool | None = False,
+) -> None:
+    """Display scrollable views of one patient"""
+    config = msp.pipeline.load_config(config_path)
+    pipeline_config = config["pipeline"]
+    structure_name_mapping = pipeline_config.get("structure_name_mapping", None)
+
+    # Load patient data
+    struct_dict = msp.io.load_patient_structures(
+        patient_path,
+        pipeline_config["structure_names"],
+        structure_name_mapping,
+    )
+    if show_bone:
+        HU_range = pipeline_config.get("HU_range")
+        voxel_size = struct_dict["Image"][1]
+        struct_dict_copy = {}
+        for key, item in struct_dict.items():
+            struct_dict_copy[key] = item[0]
+        proc_image, bone_ct = msp.preprocessing.preprocess_bone_image(
+            struct_dict_copy,
+            HU_range,
+        )
+        struct_dict["Bones"] = bone_ct
+
+    if not struct_dict:
+        logger.warning(f"No matching files found in {patient_path}. Skipping...")
+        return
+
+    voxel_size = struct_dict["Image"][1]
+
+    # Try to load full-image parameters
+    full_param_path = os.path.join(result_path, "optimized_parameter_full_image.npy")
+
+    if os.path.exists(full_param_path):
+        params = np.load(full_param_path, mmap_mode="r").copy()
+
+    else:
+        # Use cropped params and convert
+        cropped_param_path = os.path.join(result_path, "parameter_array.npy")
+        params_cropped = np.load(cropped_param_path, mmap_mode="r")[-1].copy()
+        _, _, crop_info = msp.preprocessing.crop_patient_volumes(
+            struct_dict,
+            pipeline_config["slice_axis"],
+            pipeline_config["slice_range"],
+            pipeline_config["margins"],
+            pipeline_config["reference"],
+            pipeline_config.get("crop_mode", None),
+            pipeline_config.get("fixed_size", None),
+            pipeline_config.get("exclude_mandible", False),
+            pipeline_config.get("crop_shoulders", None),
+        )
+        params = msp.geometry.crop_to_full_coords(
+            params_cropped,
+            crop_info,
+            voxel_size,
+        )
+
+    logger.info(f"loaded params {params}")
+
+    struct_dict_cropped, _, crop_info_vis = msp.preprocessing.crop_patient_volumes(
+        struct_dict,
+        slice_axis=2,
+        slice_range=None,
+        margins=crop_margin,
+        reference=crop_reference,
+        crop_mode=crop_mode,
+        fixed_size=fixed_size,
+        exclude_mandible=pipeline_config.get("exclude_mandible", False),
+    )
+
+    # After loading params (around line 326)
+    paramsfulltest = np.load(full_param_path, mmap_mode="r").copy()
+    print(f"Loaded FULL params: {paramsfulltest}")
+
+    # After crop (around line 362)
+    print(f"crop_info_vis: {crop_info_vis}")
+    print(f"struct_dict_cropped Image shape: {struct_dict_cropped['Image'].shape}")
+
+    plane_params_cropped = msp.geometry.full_to_crop_coords(
+        params,
+        crop_info_vis,
+        voxel_size,
+    )
+    # After conversion (around line 366)
+    print(f"Converted to CROPPED params: {plane_params_cropped}")
+    print(f"  - Plane offset L: {plane_params_cropped[2]:.2f} mm")
+
+    crop_shoulder = pipeline_config.get("crop_shoulders")
+    if crop_shoulder is not None:
+        crop_info = msp.io.load_crop_info(result_path)
+        shoulder_info = crop_info.get("shoulder_axis", None)
+    else:
+        shoulder_info = None
+
+    display_scrollable_views(
+        struct_dict_cropped,
+        voxel_size,
+        plane_coeffs_list=[plane_params_cropped],
+        optimization_methods_list=None,
+        shoulder_info=shoulder_info,
+        hide_msp=hide_msp,
+    )
+    return
+
+
+def adjustable_patient(
+    patient_path: str | None,
+    config_path: str | None,
+    result_path: str | None,
+    crop_reference: str | None = "GTVp",
+    crop_margin: int | None = 0,
+    crop_mode: str | None = "margins",
+    fixed_size: int | None = None,
 ) -> None:
     """Display scrollable views of one patient"""
     config = msp.pipeline.load_config(config_path)
@@ -295,7 +529,7 @@ def scrollable_patient(
 
     if not struct_dict:
         logger.warning(f"No matching files found in {patient_path}. Skipping...")
-        return
+        return None
 
     voxel_size = struct_dict["Image"][1]
 
@@ -304,11 +538,12 @@ def scrollable_patient(
 
     if os.path.exists(full_param_path):
         params = np.load(full_param_path, mmap_mode="r").copy()
+
     else:
         # Use cropped params and convert
         cropped_param_path = os.path.join(result_path, "parameter_array.npy")
         params_cropped = np.load(cropped_param_path, mmap_mode="r")[-1].copy()
-        _, _, _, crop_start, _, _ = msp.preprocessing.crop_patient_volumes(
+        _, _, crop_info = msp.preprocessing.crop_patient_volumes(
             struct_dict,
             pipeline_config["slice_axis"],
             pipeline_config["slice_range"],
@@ -316,39 +551,58 @@ def scrollable_patient(
             pipeline_config["reference"],
             pipeline_config.get("crop_mode", None),
             pipeline_config.get("fixed_size", None),
+            pipeline_config.get("exclude_mandible", False),
+            pipeline_config.get("crop_shoulders", None),
         )
         params = msp.geometry.crop_to_full_coords(
             params_cropped,
-            crop_start,
+            crop_info,
             voxel_size,
         )
 
     logger.info(f"loaded params {params}")
 
-    struct_dict_cropped, _, _, crop_start, crop_end, crop_axis = (
-        msp.preprocessing.crop_patient_volumes(
-            struct_dict,
-            slice_axis=2,
-            slice_range=None,
-            margins=crop_margin,
-            reference=crop_reference,
-            crop_mode=crop_mode,
-            fixed_size=fixed_size,
-        )
-    )
-    plane_params_cropped = msp.geometry.full_to_crop_coords(
-        params,
-        crop_start,
-        voxel_size,
+    struct_dict_cropped, _, crop_info_vis = msp.preprocessing.crop_patient_volumes(
+        struct_dict,
+        slice_axis=2,
+        slice_range=None,
+        margins=crop_margin,
+        reference=crop_reference,
+        crop_mode=crop_mode,
+        fixed_size=fixed_size,
+        exclude_mandible=pipeline_config.get("exclude_mandible", False),
     )
 
-    display_scrollable_views(
+    # After loading params (around line 326)
+    paramsfulltest = np.load(full_param_path, mmap_mode="r").copy()
+    print(f"Loaded FULL params: {paramsfulltest}")
+
+    # After crop (around line 362)
+    print(f"crop_info_vis: {crop_info_vis}")
+    print(f"struct_dict_cropped Image shape: {struct_dict_cropped['Image'].shape}")
+
+    plane_params_cropped = msp.geometry.full_to_crop_coords(
+        params,
+        crop_info_vis,
+        voxel_size,
+    )
+    # After conversion (around line 366)
+    print(f"Converted to CROPPED params: {plane_params_cropped}")
+    print(f"  - Plane offset L: {plane_params_cropped[2]:.2f} mm")
+
+    crop_shoulder = pipeline_config.get("crop_shoulders")
+    if crop_shoulder is not None:
+        crop_info = msp.io.load_crop_info(result_path)
+        shoulder_info = crop_info.get("shoulder_axis", None)
+    else:
+        shoulder_info = None
+
+    display_interactive_plane_widget(
         struct_dict_cropped,
         voxel_size,
-        plane_coeffs_list=[plane_params_cropped],
-        optimization_methods_list=None,
+        initial_plane_params=plane_params_cropped,
     )
-    return
+    return crop_info_vis, voxel_size
 
 
 def display_interactive_plane_widget(
@@ -691,6 +945,11 @@ def display_interactive_plane_widget(
         "y": y_slider,
     }
     display_interactive_plane_widget.get_current_params = get_current_params
+    crop_info = {
+        "x_axis": {"start": x_start, "end": x_end, "axis": 1},
+        "y_axis": {"start": y_start, "end": y_end, "axis": 0},
+    }
+    return
 
 
 # Simple function to get current widget parameters - call this directly!

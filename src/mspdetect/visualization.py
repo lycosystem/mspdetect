@@ -1,5 +1,6 @@
 """This module defines functions for visualization of various results."""
 
+import gc
 import os
 
 import imageio
@@ -410,13 +411,17 @@ def make_plane_gif(
         # render to image
         canvas.draw()
         buf, (w, h) = canvas.print_to_buffer()
-        frame = np.frombuffer(buf, dtype="uint8").reshape(h, w, 4)[..., :3]
+        frame = np.frombuffer(buf, dtype="uint8").reshape(h, w, 4)[..., :3].copy()
         writer.append_data(frame)
 
         plt.close(fig)
+        del canvas, buf, frame
+        gc.collect
 
     writer.close()
     logger.info(f"Saved GIF to {output_path}")
+
+    gc.collect()
 
 
 def make_optimization_gif(
@@ -536,17 +541,20 @@ def make_optimization_gif(
         canvas = fig.canvas
         canvas.draw()
         buf, (w, h) = canvas.print_to_buffer()
-        frame = np.frombuffer(buf, dtype="uint8").reshape(h, w, 4)[..., :3]
+        frame = np.frombuffer(buf, dtype="uint8").reshape(h, w, 4)[..., :3].copy()
 
         # Add frame to GIF
         writer.append_data(frame)
 
         plt.close(fig)
+        del canvas, buf, frame
+        gc.collect()
 
     writer.close()
     logger.info(
         f"Saved optimization GIF to {os.path.join(output_path, 'optimization_progress.gif')}",
     )
+    gc.collect()
 
 
 def plot_axial_coronal(

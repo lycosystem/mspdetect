@@ -84,15 +84,29 @@ def generate_normal(theta: float, phi: float) -> np.ndarray:
     return np.stack([x, y, z], axis=-1)
 
 
-def crop_to_full_coords(params, crop_start, voxel_size):
+def physical_plane_params(params, voxel_size):
+    """Convert plane parameters from voxel space to physical space.
+
+    :param params: Plane parameters in voxel space (theta, phi, L)
+    :param voxel_size: np.array, voxel size
+    """
+    azimuthal, polar, L = params
+    n = generate_normal(azimuthal, polar)
+    vec_voxel = L * n
+    vec_phys = np.multiply(vec_voxel, voxel_size)
+    return vector_to_angles(vec_phys)
+
+
+# don't need to convert to physical params, because the plane params are already the physical params
+def crop_to_full_coords(params, crop_info, voxel_size):
     """Convert plane parameters from cropped to full image coordinates.
 
     Parameters
     ----------
     params : np.ndarray or tuple
         Plane parameters [azimuthal, polar, L] in cropped coordinates
-    crop_start : int
-        Starting slice index of the crop in the full image
+    crop_info : dict
+        Cropping axes and corresponding ranges
     voxel_size : tuple or np.ndarray
         Voxel spacing (sy, sx, sz) in mm
 
@@ -104,21 +118,34 @@ def crop_to_full_coords(params, crop_start, voxel_size):
     """
     azimuthal, polar, L_cropped = params
     n = generate_normal(azimuthal, polar)
-    k = np.array([0, 0, crop_start * voxel_size[-1]])
-    full_L = np.dot(k, n) + L_cropped
+
+    # Map array axes to coordinate system
+    axis_to_coord = {0: 1, 1: 0, 2: 2}
+
+    # Accumulate offset from all cropped axes
+    total_offset = np.zeros(3)
+    for crop_key in crop_info:
+        axis = crop_info[crop_key].get("axis")
+        crop_start = crop_info[crop_key].get("start", 0)
+
+        if axis is not None:
+            coord_idx = axis_to_coord[axis]
+            total_offset[coord_idx] += crop_start * voxel_size[axis]
+
+    full_L = L_cropped + np.dot(total_offset, n)
 
     return np.array([azimuthal, polar, full_L])
 
 
-def full_to_crop_coords(params, crop_start, voxel_size):
+def full_to_crop_coords(params, crop_info, voxel_size):
     """Convert plane parameters from full to cropped image coordinates.
 
     Parameters
     ----------
     params : np.ndarray or tuple
         Plane parameters [azimuthal, polar, L] in full image coordinates
-    crop_start : int
-        Starting slice index of the crop in the full image
+    crop_info : dict
+        Cropping axes and corresponding ranges
     voxel_size : tuple or np.ndarray
         Voxel spacing (sy, sx, sz) in mm
 
@@ -130,7 +157,20 @@ def full_to_crop_coords(params, crop_start, voxel_size):
     """
     azimuthal, polar, L_full = params
     n = generate_normal(azimuthal, polar)
-    k = np.array([0, 0, crop_start * voxel_size[-1]])
-    cropped_L = L_full - np.dot(k, n)
+
+    # Map array axes to coordinate system
+    axis_to_coord = {0: 1, 1: 0, 2: 2}
+
+    # Accumulate offset from all cropped axes
+    total_offset = np.zeros(3)
+    for crop_key in crop_info:
+        axis = crop_info[crop_key].get("axis")
+        crop_start = crop_info[crop_key].get("start", 0)
+
+        if axis is not None:
+            coord_idx = axis_to_coord[axis]
+            total_offset[coord_idx] += crop_start * voxel_size[axis]
+
+    cropped_L = L_full - np.dot(total_offset, n)
 
     return np.array([azimuthal, polar, cropped_L])

@@ -1,7 +1,11 @@
 """This module defines the pipeline for detecting the MSP of many CT images."""
 
+import functools
+import gc
 import os
+import re
 import time
+from multiprocessing import Pool
 from typing import Any
 
 import numpy as np
@@ -18,17 +22,17 @@ def load_config(config_path="../config.yaml") -> dict[str, Any]:
 
 
 def _get_patient_folders(
-        base_path: str,
-        patient: str | list[str] | None
-    ) -> list[str]:
+    base_path: str,
+    patient: str | list[str] | None,
+) -> list[str]:
     """Get list of patient folders to process."""
     if patient is None:
         # Process all patients in base_path
         return sorted([d for d in os.listdir(base_path)])
-    elif isinstance(patient, list):
+    if isinstance(patient, list):
         # Process specific list of patients
         return patient
-    elif os.path.isfile(patient):
+    if os.path.isfile(patient):
         # Read patient list from file
         with open(patient) as f:
             return [line.strip() for line in f if line.strip()]
@@ -36,7 +40,8 @@ def _get_patient_folders(
         # Process single patient
         return [str(patient)]
 
-def generate_output_directory_name(base_name, pipeline_config, opt_config):
+
+def generate_output_directory_name(base_name, patient, pipeline_config, opt_config):
     """Generate output directory name encoding all parameters.
 
     Parameters
@@ -64,6 +69,15 @@ def generate_output_directory_name(base_name, pipeline_config, opt_config):
 
     """
     components = [base_name]
+
+    if pipeline_config.get("exclude_mandible", False):
+        components.append("noMandible")
+
+    crop_shoulders = pipeline_config.get("crop_shoulders")
+    if crop_shoulders is not None:
+        axis = crop_shoulders.get("axis", 1)
+        extent_mm = crop_shoulders.get("max_extent_mm", 0)
+        components.append(f"shoulder{extent_mm}mm_ax{axis}")
 
     # Crop configuration
     if "slice_range" in pipeline_config and pipeline_config["slice_range"] is not None:
@@ -97,6 +111,11 @@ def generate_output_directory_name(base_name, pipeline_config, opt_config):
     init_steps = opt_config.get("initialization_steps", "grid")
     components.append(f"init{init_steps}")
 
+    if patient and isinstance(patient, str):
+        match = re.search(r"patients_(.+?)\.txt", patient)
+        if match:
+            components.append(match.group(1))
+
     return "_".join(components)
 
 
@@ -129,10 +148,7 @@ def _run_preprocessing_pipeline(
     (
         struct_dict_cropped,
         interpolation_image,
-        interpolation_pad,
-        crop_start,
-        crop_end,
-        crop_axis,
+        crop_info,
     ) = preprocessing.crop_patient_volumes(
         struct_dict,
         slice_axis=pipeline_config["slice_axis"],
@@ -141,6 +157,9 @@ def _run_preprocessing_pipeline(
         reference=pipeline_config["reference"],
         crop_mode=pipeline_config["crop_mode"],
         fixed_size=pipeline_config["fixed_size"],
+        exclude_mandible=pipeline_config.get("exclude_mandible", False),
+        crop_shoulders=pipeline_config.get("crop_shoulders", None),
+        interp_pad_z=pipeline_config.get("interp_pad_z", None),
     )
 
     # Preprocess bone image
@@ -154,7 +173,7 @@ def _run_preprocessing_pipeline(
         output_path,
         interpolation_image,
         voxel_size,
-        pad_slices=interpolation_pad,
+        crop_info,
     )
 
     return {
@@ -162,8 +181,7 @@ def _run_preprocessing_pipeline(
         "image": image,
         "bone_ct": bone_ct,
         "interpolator": interpolator,
-        "crop_start": crop_start,
-        "crop_end": crop_end,
+        "crop_info": crop_info,
         "margins": pipeline_config["margins"],
         "reference": pipeline_config["reference"],
     }
@@ -188,18 +206,26 @@ def _run_optimization_pipeline(
         initialization_steps=optimization_config["initialization_steps"],
     )
 
-    # Run optimization
-    optimized_parameters, optimized_objective_values = (
-        optimization.run_or_load_optimization(
+    for i, (plane_val, delta_val) in enumerate(zip(initial_plane, delta, strict=False)):
+        # Run optimization
+        output_path_start = os.path.join(
             output_path,
-            processed_data,
-            voxel_size,
-            delta,
-            initial_plane,
-            [],  # optimized_parameter_list
-            [],  # optimized_objective_value_list
+            f"{i:02d}",
         )
-    )
+        if not os.path.exists(output_path_start):
+            os.makedirs(output_path_start)
+
+        optimized_parameters, optimized_objective_values = (
+            optimization.run_or_load_optimization(
+                output_path_start,
+                processed_data,
+                voxel_size,
+                delta_val,
+                plane_val,
+                [],  # optimized_parameter_list
+                [],  # optimized_objective_value_list
+            )
+        )
 
     return {
         "parameters": optimized_parameters,
@@ -300,7 +326,47 @@ def process_single_patient(
             visualization_config,
         )
 
+    # explicitly delete processed data
+    del processed_data["interpolator"]
+    del processed_data
+
+    # Clear matplotlib caches to prevent memory accumulation
+    import matplotlib.pyplot as plt
+
+    plt.close("all")
+    # Clear font cache which accumulates from GIF generation
+    try:
+        from matplotlib import font_manager
+
+        font_manager._get_font.cache_clear()  # Clear font lookup cache
+    except:
+        pass
+
+    gc.collect()
+
     return optimization_results
+
+
+def _process_patient_wrapper(
+    folder: str,
+    base_path: str,
+    output_path: str,
+    pipeline_config: dict,
+    optimization_config: dict,
+    visualization_config: dict,
+) -> None:
+    """Wrapper for multiprocessing."""
+    logger.info(f"Processing patient: {folder}")
+    try:
+        process_single_patient(
+            folder_path=os.path.join(base_path, folder),
+            output_path=os.path.join(output_path, folder),
+            pipeline_config=pipeline_config,
+            optimization_config=optimization_config,
+            visualization_config=visualization_config,
+        )
+    except Exception as e:
+        logger.error(f"Error processing {folder}: {e}")
 
 
 def run_msp_pipeline(
@@ -319,44 +385,90 @@ def run_msp_pipeline(
 
     # Extract configuration sections
     base_path = config["base_path"]
-    # output_path = config["output_path"]
+    result_path = config.get("output_path")
+    if result_path is None:
+        result_path = base_path
     patient = config["patient"]
+
+    overwrite = config.get("overwrite", False)
 
     pipeline_config = config["pipeline"]
     optimization_config = config["optimization"]
     visualization_config = config["visualization"]
 
     output_path = generate_output_directory_name(
-        base_path,
+        result_path,
+        patient,
         pipeline_config,
         optimization_config,
     )
     start_time = time.time()
-    results = {"parameters": [], "objective_values": []}
+    # results = {"parameters": [], "objective_values": []}
 
     # Get patient folders
     folders = _get_patient_folders(base_path, patient)
 
-    for folder in tqdm.tqdm(folders, desc="Processing CTs"):
-        logger.info(f"Processing patient: {folder}")
-
-        patient_results = process_single_patient(
-            folder_path=os.path.join(base_path, folder),
-            output_path=os.path.join(output_path, folder),
-            pipeline_config=pipeline_config,
-            optimization_config=optimization_config,
-            visualization_config=visualization_config,
+    if not overwrite:
+        initial_count = len(folders)
+        folders = [
+            f for f in folders if not os.path.exists(os.path.join(output_path, f))
+        ]
+        logger.info(
+            f"Skipping {initial_count - len(folders)} already processed patients",
         )
+    else:
+        logger.info("Overwrite enabled: processing all patients.")
 
-        if patient_results:
-            results["parameters"].append(patient_results["parameters"])
-            results["objective_values"].append(patient_results["objective_value"])
+    # Get number of processes from config
+    # num_processes = config.get("num_processes", os.cpu_count() - 1)
+    num_processes = 8
+
+    # Create partial function
+    process_func = functools.partial(
+        _process_patient_wrapper,
+        base_path=base_path,
+        output_path=output_path,
+        pipeline_config=pipeline_config,
+        optimization_config=optimization_config,
+        visualization_config=visualization_config,
+    )
+
+    # Process in parallel
+    if num_processes == 1:
+        # Sequential processing (useful for debugging/visualization)
+        for folder in tqdm.tqdm(folders, desc="Processing CTs"):
+            process_func(folder)
+    else:
+        # Parallel processing
+        with Pool(processes=num_processes) as pool:
+            list(
+                tqdm.tqdm(
+                    pool.imap(process_func, folders),
+                    total=len(folders),
+                    desc="Processing CTs",
+                ),
+            )
+
+    # for folder in tqdm.tqdm(folders, desc="Processing CTs"):
+    #     logger.info(f"Processing patient: {folder}")
+
+    #     patient_results = process_single_patient(
+    #         folder_path=os.path.join(base_path, folder),
+    #         output_path=os.path.join(output_path, folder),
+    #         pipeline_config=pipeline_config,
+    #         optimization_config=optimization_config,
+    #         visualization_config=visualization_config,
+    #     )
+
+    #     if patient_results:
+    #         results["parameters"].append(patient_results["parameters"])
+    #         results["objective_values"].append(patient_results["objective_value"])
 
     end_time = time.time()
     duration = end_time - start_time
 
     # Save batch results
-    _save_batch_results(output_path, results)
+    # _save_batch_results(output_path, results)
     logger.info(
         f"Pipeline completed for {len(folders)} patient(s) in {duration:.2f} seconds.",
     )

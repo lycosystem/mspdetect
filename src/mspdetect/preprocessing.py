@@ -1,9 +1,7 @@
 """Module defining functions for preprocessing the CT images."""
 
-import os
 import time
 
-import joblib
 import numpy as np
 import scipy as sp
 from loguru import logger
@@ -33,116 +31,236 @@ def mask_via_threshold(ct_image, HU_range=(300, 1500)):
     return bone_mask
 
 
-# def crop_patient_volumes(struct_dict, slice_axis=2, slice_range=None):
-#     """Crop all structures in the patient dictionary along a specified axis and range.
+def _crop_structures_along_axis(struct_dict, axis, start, end):
+    """Generic function to crop all structures along one axis given explicit bounds.
 
-#     Parameters
-#     ----------
-#     struct_dict : dict
-#         Dictionary of structures, each as (image, voxel_size) or image array.
-#     slice_axis : int
-#         Axis along which to crop (default: 2, axial).
-#     slice_range : tuple or None
-#         (start, end) indices for cropping. If None, uses GTVp mask or full range.
+    Parameters
+    ----------
+    struct_dict : dict
+        Dictionary of structures (arrays or (array, metadata) tuples)
+    axis : int
+        Axis along which to crop (0, 1, or 2)
+    start : int
+        Starting index (inclusive)
+    end : int
+        Ending index (exclusive, following numpy convention)
 
-#     Returns
-#     -------
-#     dict
-#         Dictionary with cropped structure arrays.
+    Returns
+    -------
+    dict
+        Cropped structures dictionary
 
-#     """
-#     struct_dict_cropped = struct_dict.copy()
+    """
+    struct_dict_cropped = {}
+    idx = np.arange(start, end)
 
-#     image = struct_dict["Image"][0]
-#     if "GTVp" in struct_dict:
-#         gtvp = struct_dict["GTVp"][0]
-#         slc = sp.ndimage.find_objects(gtvp.astype(int))[0]
-#         start, end = slc[slice_axis].start, slc[slice_axis].stop - 1
-#     elif slice_range is not None:
-#         start, end = slice_range
-#     else:
-#         start, end = 0, image.shape[slice_axis] - 1
+    for structure_name, structure_data in struct_dict.items():
+        # Handle both (array, metadata) tuples and plain arrays
+        if isinstance(structure_data, tuple):
+            array = structure_data[0]
+        else:
+            array = structure_data
 
-#     if "Mandible" in struct_dict:
-#         mandible = struct_dict["Mandible"][0]
-#         mandible_slices = sp.ndimage.find_objects(mandible.astype(int))
-#         if mandible_slices:
-#             mandible_slice = mandible_slices[0][slice_axis]
-#             mandible_start = mandible_slice.start
-#             if end <= mandible_start + 5:
-#                 mandible_stop_lower = mandible_start + 5
-#                 start = min(start, mandible_slice.start)
-#                 end = max(end, mandible_stop_lower)
+        cropped_array = np.take(array, idx, axis=axis)
+        # Save the array
+        struct_dict_cropped[structure_name] = cropped_array
 
-#     idx = np.arange(start, end + 1)
-
-#     def _crop(arr, idx):
-#         return np.take(arr, idx, axis=slice_axis)
-
-#     for structure in struct_dict:
-#         struct_dict_cropped[structure] = _crop(struct_dict[structure][0], idx)
-
-#     idx_interpolation = np.arange(start - 10, end + 1 + 10)
-#     interpolation_image = _crop(image, idx_interpolation)
-
-#     return struct_dict_cropped, interpolation_image, start, end, slice_axis
+    return struct_dict_cropped
 
 
-# def crop_patient_volumes_mid(struct_dict, slice_axis=2, slice_range=None):
-#     """Crop all structures in the patient dictionary along a specified axis and range.
+def _adjust_for_mandible(struct_dict, axis, start, end):
+    """Adjust bounds to include mandible if close to GTV."""
+    mandible = struct_dict["Mandible"][0]
+    mandible_slices = sp.ndimage.find_objects(mandible.astype(int))
+    if mandible_slices:
+        mandible_slice = mandible_slices[0][axis]
+        mandible_start = mandible_slice.start
+        if end <= mandible_start + 5:
+            mandible_stop_lower = mandible_start + 5
+            start = min(start, mandible_slice.start)
+            end = max(end, mandible_stop_lower)
+    return start, end
 
-#     Parameters
-#     ----------
-#     struct_dict : dict
-#         Dictionary of structures, each as (image, voxel_size) or image array.
-#     slice_axis : int
-#         Axis along which to crop (default: 2, axial).
-#     slice_range : tuple or None
-#         (start, end) indices for cropping. If None, uses GTVp mask or full range.
 
-#     Returns
-#     -------
-#     dict
-#         Dictionary with cropped structure arrays.
+def _apply_margins(start, end, margins):
+    """Apply margin(s) to crop bounds."""
+    if isinstance(margins, int):
+        lower_margin = upper_margin = margins
+    elif isinstance(margins, tuple):
+        lower_margin, upper_margin = margins
+    else:
+        raise ValueError(f"margins must be int or tuple, got {type(margins)}")
+    return start - lower_margin, end + upper_margin
 
-#     """
-#     struct_dict_cropped = struct_dict.copy()
 
-#     image = struct_dict["Image"][0]
-#     if "GTVp" in struct_dict:
-#         gtvp = struct_dict["GTVp"][0]
-#         slc = sp.ndimage.find_objects(gtvp.astype(int))[0]
-#         start, end = slc[slice_axis].start, slc[slice_axis].stop - 1
-#     elif slice_range is not None:
-#         start, end = slice_range
-#     else:
-#         start, end = 0, image.shape[slice_axis] - 1
+def _apply_fixed_size(start, end, fixed_size):
+    """Apply fixed size window centered on reference."""
+    ref_center = (start + end) // 2
+    ref_extent = end - start
 
-#     if "Mandible" in struct_dict:
-#         mandible = struct_dict["Mandible"][0]
-#         mandible_slices = sp.ndimage.find_objects(mandible.astype(int))
-#         if mandible_slices:
-#             mandible_slice = mandible_slices[0][slice_axis]
-#             mandible_start = mandible_slice.start
-#             if end <= mandible_start + 5:
-#                 mandible_stop_lower = mandible_start + 5
-#                 start = min(start, mandible_slice.start)
-#                 end = max(end, mandible_stop_lower)
+    # If reference larger than 2*fixed_size, use reference bounds
+    if ref_extent <= 2 * fixed_size:
+        start = ref_center - fixed_size
+        end = ref_center + fixed_size
+    return start, end
 
-#     start = max(0, start - 20)
-#     end = np.shape(struct_dict["Image"][0])[slice_axis]
-#     idx = np.arange(start, end)
 
-#     def _crop(arr, idx):
-#         return np.take(arr, idx, axis=slice_axis)
+def _determine_z_axis_bounds(
+    struct_dict,
+    slice_axis=2,
+    slice_range=None,
+    margins=None,
+    reference="GTVp",
+    crop_mode="margins",
+    fixed_size=None,
+    exclude_mandible=False,
+):
+    """Determine crop bounds for primary (z) axis.
 
-#     for structure in struct_dict:
-#         struct_dict_cropped[structure] = _crop(struct_dict[structure][0], idx)
+    Returns
+    -------
+    dict
+        {"start": int, "end": int, "axis": int}
 
-#     idx_interpolation = np.arange(start, end)
-#     interpolation_image = _crop(image, idx_interpolation)
+    """
+    image = struct_dict["Image"][0]
+    image_size = image.shape[slice_axis]
 
-#     return struct_dict_cropped, interpolation_image, start, end, slice_axis
+    if slice_range is not None:
+        # Use explicit range, ignore margins and references
+        start, end = slice_range
+    else:
+        # Use reference structure to determine range
+        if reference in struct_dict:
+            ref_struct = struct_dict[reference][0]
+            slc = sp.ndimage.find_objects(ref_struct.astype(int))[0]
+            start, end = slc[slice_axis].start, slc[slice_axis].stop - 1
+        else:
+            # Fall back to full image if reference not found
+            start, end = 0, image_size - 1
+
+        # Adjust for mandible (if needed)
+        if not exclude_mandible and "Mandible" in struct_dict:
+            start, end = _adjust_for_mandible(struct_dict, slice_axis, start, end)
+
+        # Apply margins around reference structure if provided
+        if crop_mode == "margins" and margins is not None:
+            start, end = _apply_margins(start, end, margins)
+        # Used fixed size around the GTVp
+        elif crop_mode == "fixed_size" and fixed_size is not None:
+            start, end = _apply_fixed_size(start, end, fixed_size)
+
+    # Clamp to valid image bounds
+    start = max(0, start)
+    end = min(image_size - 1, end)
+
+    if start > end:
+        raise ValueError(f"Invalid crop range: start ({start}) > end ({end})")
+
+    return {"start": start, "end": end, "axis": slice_axis}
+
+
+def _determine_shoulder_bounds(
+    struct_dict,
+    slice_axis=1,
+    max_extent_mm=200,
+    reference="Body",
+):
+    """Determine crop bounds for shoulder (lateral) axis.
+
+    Parameters
+    ----------
+    shoulder_axis : int
+        Axis along which to crop shoulders (typically 0 or 1)
+    max_extent_mm : float
+        Maximum lateral extent to keep in mm
+
+    Returns
+    -------
+    dict
+        {"start": int, "end": int, "axis": int}
+
+    """
+    image = struct_dict["Image"][0]
+    voxel_size = struct_dict["Image"][1][slice_axis]
+    image_size = image.shape[slice_axis]
+
+    # Find center from reference structure
+    if reference in struct_dict:
+        ref_struct = struct_dict[reference][0]
+        slc = sp.ndimage.find_objects(ref_struct.astype(int))[0]
+        center = (slc[slice_axis].start + slc[slice_axis].stop) // 2
+    else:
+        # Fallback to image center
+        center = image_size // 2
+
+    # Calculate extent in voxels
+    max_extent_voxels = int(max_extent_mm / voxel_size)
+    half_extent = max_extent_voxels // 2
+
+    # Determine bounds centered on reference
+    start = max(0, center - half_extent)
+    end = min(image_size, center + half_extent)
+
+    return {"start": start, "end": end, "axis": slice_axis}
+
+
+def _create_interpolation_image(
+    original_image,
+    crop_bounds,
+    interp_pad=10,
+):
+    """Create interpolation image with padding around crop bounds.
+
+    Parameters
+    ----------
+    original_image : np.ndarray
+        The original uncropped image
+    crop_bounds : dict
+        Dictionary with {"start": int, "end": int, "axis": int}
+    interp_pad : int, default 10
+        Number of slices to pad on each side for interpolation
+
+    Returns
+    -------
+    tuple
+        (interpolation_image, actual_pad_used)
+        - interpolation_image : cropped image with padding
+        - actual_pad_used : actual padding applied (may be less if truncated)
+
+    """
+    start = crop_bounds["start"]
+    end = crop_bounds["end"]
+    axis = crop_bounds["axis"]
+    image_size = original_image.shape[axis]
+
+    # Calculate padded bounds
+    interp_start = max(0, start - interp_pad)
+    interp_end = min(image_size - 1, end + interp_pad)
+
+    # Calculate actual padding used
+    actual_pad = min(start - interp_start, interp_pad)
+
+    # Warn if padding was truncated at lower bound
+    if interp_start == 0 and start < interp_pad:
+        logger.warning(
+            f"Interpolation padding truncated at lower bound "
+            f"(requested {interp_pad}, got {actual_pad} slices)",
+        )
+
+    # Also check upper bound truncation
+    if interp_end == image_size - 1 and (image_size - 1 - end) < interp_pad:
+        upper_pad = image_size - 1 - end
+        logger.warning(
+            f"Interpolation padding truncated at upper bound "
+            f"(requested {interp_pad}, got {upper_pad} slices)",
+        )
+
+    # Create padded interpolation image
+    idx_interpolation = np.arange(interp_start, interp_end + 1)
+    interpolation_image = np.take(original_image, idx_interpolation, axis=axis)
+
+    return interpolation_image, actual_pad
 
 
 def crop_patient_volumes(
@@ -153,144 +271,82 @@ def crop_patient_volumes(
     reference="GTVp",
     crop_mode="margins",
     fixed_size=None,
+    exclude_mandible=False,
+    crop_shoulders=None,
+    interp_pad_z=None,
 ):
-    """Crop all structures in the patient dictionary along a specified axis and range.
+    """Crop patient volumes along primary and optional secondary axes."""
+    # Set default padding values
+    if interp_pad_z is None:
+        interp_pad_z = 10
 
-    Parameters
-    ----------
-    struct_dict : dict
-        Dictionary of structures, each as (image, voxel_size) or image array.
-    slice_axis : int, default 2
-        Axis along which to crop (default: 2, axial).
-    slice_range : tuple or None, default None
-        Explicit (start, end) indices for cropping. If provided, this range
-        is used directly and `margins` and `reference` are ignored.
-        If None, the crop range is determined from `reference` structure bounds
-        expanded by `margins`.
-    margins : int or tuple of (int, int) or None, default None
-        Margin(s) in slices to add around the reference structure bounds.
-        Only used when `slice_range` is None.
-        - If int: symmetric margin applied to both sides
-        - If tuple: (lower_margin, upper_margin) applied asymmetrically
-        - If None: no margin applied (crop exactly to reference bounds)
-    reference : str, default "GTVp"
-        Structure name to use for determining crop bounds.
-        Only used when `slice_range` is None.
-        If the reference structure is not present, uses the full image range.
+    original_image = struct_dict["Image"][0]
 
-    Returns
-    -------
-    tuple
-        (struct_dict_cropped, interpolation_image, start, end, slice_axis)
-        - struct_dict_cropped : dict of cropped structure arrays
-        - interpolation_image : cropped image with extra padding for interpolation
-        - start, end : inclusive slice indices used for cropping
-        - slice_axis : axis along which cropping was performed
-
-    """
-    struct_dict_cropped = struct_dict.copy()
-    image = struct_dict["Image"][0]
-    image_size = image.shape[slice_axis]
-
-    if slice_range is not None:
-        # Use explicit range, ignore margins and reference
-        start, end = slice_range
-    else:
-        # Use reference structure to determine range
-        if reference in struct_dict:
-            ref_struct = struct_dict[reference][0]
-            slc = sp.ndimage.find_objects(ref_struct.astype(int))[0]
-            start, end = slc[slice_axis].start, slc[slice_axis].stop - 1
-        else:
-            # Fallback to full image if reference not found
-            start, end = 0, image_size - 1
-
-        # Check for mandible (only when explicit slice range not available)
-        if "Mandible" in struct_dict:
-            mandible = struct_dict["Mandible"][0]
-            mandible_slices = sp.ndimage.find_objects(mandible.astype(int))
-            if mandible_slices:
-                mandible_slice = mandible_slices[0][slice_axis]
-                mandible_start = mandible_slice.start
-                # Extend range if mandible is close to current end
-                if end <= mandible_start + 5:
-                    mandible_stop_lower = mandible_start + 5
-                    start = min(start, mandible_slice.start)
-                    end = max(end, mandible_stop_lower)
-
-        if crop_mode == "margins":
-            # Apply margins if provided
-            if margins is not None:
-                if isinstance(margins, int):
-                    lower_margin = upper_margin = margins
-                elif isinstance(margins, tuple):
-                    lower_margin, upper_margin = margins
-                else:
-                    raise ValueError(
-                        f"margins must be int or tuple, got {type(margins)}",
-                    )
-
-                start = start - lower_margin
-                end = end + upper_margin
-
-        elif crop_mode == "fixed_size":
-            if fixed_size is not None:
-                ref_center = (start + end) // 2
-                ref_extent = end - start
-
-                # If GTV is larger than 2*fixed_size, just use GTV bounds
-                if ref_extent > 2 * fixed_size:
-                    pass
-                else:
-                    # Create symmetric window around center
-                    start = ref_center - fixed_size
-                    end = ref_center + fixed_size
-            else:
-                raise ValueError("fixed_size needs to be specified")
-
-    # Clamp to valid image bounds
-    start = max(0, start)
-    end = min(image_size - 1, end)
-
-    # Ensure valid range
-    if start > end:
-        raise ValueError(f"Invalid crop range: start ({start}) > end ({end})")
-
-    # Cropping indices
-    idx = np.arange(start, end)
-
-    def _crop(arr, idx):
-        return np.take(arr, idx, axis=slice_axis)
-
-    # Crop all structures
-    for structure in struct_dict:
-        struct_dict_cropped[structure] = _crop(struct_dict[structure][0], idx)
-
-    # Create interpolation image with padding
-    interp_pad = 10
-    interp_start = max(0, start - interp_pad)
-    interp_end = min(image_size - 1, end + interp_pad)
-
-    # Calculate padding used
-    interpolation_pad = min(start - interp_start, interp_pad)
-
-    # Warning if padding for interpolation was truncated
-    if interp_start == 0 and start < interp_pad:
-        logger.warning(
-            "Interpolation padding truncated at lower bound",
-            f"(requested {interp_pad}, got {interpolation_pad} slices)",
-        )
-    idx_interpolation = np.arange(interp_start, interp_end + 1)
-    interpolation_image = _crop(image, idx_interpolation)
-
-    return (
-        struct_dict_cropped,
-        interpolation_image,
-        interpolation_pad,
-        start,
-        end,
+    # Determine and apply z-axis cropping around reference
+    z_bounds = _determine_z_axis_bounds(
+        struct_dict,
         slice_axis,
+        slice_range,
+        margins,
+        reference,
+        crop_mode,
+        fixed_size,
+        exclude_mandible,
     )
+
+    struct_dict_cropped = _crop_structures_along_axis(
+        struct_dict,
+        z_bounds["axis"],
+        z_bounds["start"],
+        z_bounds["end"],
+    )
+
+    # z-axis interpolation image with padding
+    interpolation_image, z_pad = _create_interpolation_image(
+        original_image,
+        z_bounds,
+        interp_pad=interp_pad_z,
+    )
+
+    # collect crop information
+    crop_info = {
+        "z_axis": {**z_bounds, "pad": z_pad},
+    }
+
+    # Optional shoulder cropping
+    if crop_shoulders is not None:
+        shoulder_bounds = _determine_shoulder_bounds(
+            struct_dict,
+            crop_shoulders["axis"],
+            crop_shoulders["max_extent_mm"],
+            crop_shoulders["reference"],
+        )
+
+        struct_dict_cropped = _crop_structures_along_axis(
+            struct_dict_cropped,
+            shoulder_bounds["axis"],
+            shoulder_bounds["start"],
+            shoulder_bounds["end"],
+        )
+
+        if crop_shoulders.get("interp_pad", None) is None:
+            interp_pad_shoulder = 10
+        else:
+            interp_pad_shoulder = crop_shoulders["interp_pad"]
+
+        # add padding also for the shoulder bounds
+        interpolation_image, shoulder_pad = _create_interpolation_image(
+            interpolation_image,
+            shoulder_bounds,
+            interp_pad=interp_pad_shoulder,
+        )
+
+        crop_info["shoulder_axis"] = {
+            **shoulder_bounds,
+            "pad": shoulder_pad,
+        }
+
+    return struct_dict_cropped, interpolation_image, crop_info
 
 
 def preprocess_bone_image(struct_dict, HU_range):
@@ -329,9 +385,9 @@ def get_cached_interpolator(
     output_dir,
     image,
     voxel_size,
+    crop_info,
     filename="interpolator.joblib",
     method="cubic",
-    pad_slices=10,
 ):
     """Load or build and cache a RegularGridInterpolator for a cropped+Padded volume,
     shifting the z‐coordinates so that z=0 aligns with the first slice
@@ -360,33 +416,37 @@ def get_cached_interpolator(
         where z_mm_shifted = 0 at the first slice *after* the pad.
 
     """
-    os.makedirs(output_dir, exist_ok=True)
-    interpolator_path = os.path.join(output_dir, filename)
+    # os.makedirs(output_dir, exist_ok=True)
+    # interpolator_path = os.path.join(output_dir, filename)
 
-    Ny, Nx, Nz_pad = image.shape
-    dy, dx, dz = voxel_size
+    # Initialise physical-space sample grids without padding
+    grids = [np.arange(image.shape[i]) * voxel_size[i] for i in range(3)]
 
-    # build physical‐space sample grids
-    grid_y = np.arange(Ny) * dy
-    grid_x = np.arange(Nx) * dx
-    # shift z so that first un‐padded slice is at z=0
-    grid_z = (np.arange(Nz_pad) - pad_slices) * dz
+    # Apply padding shifts for each padded axis
+    for crop_key in crop_info:
+        axis = crop_info[crop_key].get("axis", None)
+        pad = crop_info[crop_key].get("pad", 0)
+        # Shift so that first unpadded slice is at 0
+        grids[axis] = (np.arange(image.shape[axis]) - pad) * voxel_size[axis]
 
-    if os.path.exists(interpolator_path):
-        interpolator = joblib.load(interpolator_path)
-    else:
-        start = time.time()
-        interpolator = sp.interpolate.RegularGridInterpolator(
-            (grid_y, grid_x, grid_z),
-            image,
-            method=method,
-            bounds_error=False,
-            fill_value=None,
-        )
-        elapsed = time.time() - start
-        logger.info(
-            f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}",
-        )
-        joblib.dump(interpolator, interpolator_path)
+    # if os.path.exists(interpolator_path):
+    #     interpolator = joblib.load(interpolator_path)
+    # else:
+    start = time.time()
+    interpolator = sp.interpolate.RegularGridInterpolator(
+        tuple(grids),
+        image,
+        method=method,
+        bounds_error=False,
+        fill_value=None,
+    )
+    elapsed = time.time() - start
+    logger.info(
+        f"Interpolator built in {elapsed:.2f}s.",
+    )
+    # logger.info(
+    #     f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}",
+    # )
+    # joblib.dump(interpolator, interpolator_path)
 
     return interpolator
