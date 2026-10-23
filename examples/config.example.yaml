@@ -1,0 +1,40 @@
+# Example configuration for `mspdetect run` and `mspdetect metrics`.
+# Relative paths are relative to this file. Check it with `mspdetect check-config`.
+
+data:
+  root: /path/to/patients          # one sub-directory per patient
+  patients: null                   # null = all sub-directories; or [id1, id2]; or a .txt file
+  image: CT                        # file name of the CT without .nii/.nii.gz
+  structures:                      # structure name -> file name without extension
+    GTVp: "GTVp"
+    Body: "Body"        # "Body" is used to mask out the couch
+    Mandible: "Mandible"
+    Spinal_Cord: "Spinal Cord"
+
+output: /path/to/results
+n_jobs: 4                          # patients processed in parallel
+overwrite: false                   # true: recompute patients that already have results
+
+detection:
+  hu_range: [300, 2800]            # bone window
+  crop:
+    reference: GTVp                # null: use the whole scan (CT only)
+    slice_range: null              # [start, stop): explicit slices instead of a reference
+    mode: fixed_size               # margins | fixed_size
+    margins: 10                    # slices below/above the reference (mode: margins)
+    fixed_size: 20                 # half-window in slices (mode: fixed_size)
+    include_mandible: false
+    lateral_extent_mm: 80          # null: no shoulder cropping
+    pad: 30
+  optimizer:
+    azimuth_deg: [0, 8]           # [centre, half-width] of the grid search
+    polar_deg: [90, 8]
+    grid_steps: 10
+    n_starts: 1                    # >1: also optimise from the next-best grid points
+
+metrics:
+  output: null                     # directory for metrics.csv; null = same as `output`
+  structures: [GTVp, Body, Spinal_Cord, Mandible]   # left/right volumes
+  target: GTVp                     # laterality and distances to the plane
+  plane: first_start               # first_start | best | all_starts (one row per start)
+  volume_region: slab             # whole | slab: only the slices used for detection
