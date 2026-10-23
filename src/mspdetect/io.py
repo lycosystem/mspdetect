@@ -1,232 +1,174 @@
-"""Module defining function for loading datasets and saving detected MSPs"""
+"""Loading CT images and structure masks.
+
+All volumes are reoriented to the closest canonical (RAS+) orientation on loading:
+array axis 0 runs from the patient's left to right, axis 1 from posterior to anterior
+and axis 2 from inferior to superior. The affine is kept, so every result can be
+expressed in the scanner's world coordinates.
+"""
 
 from __future__ import annotations
 
-import gzip
 import logging
 import os
-import tempfile
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path
 
 import nibabel as nib
 import numpy as np
 
+logger = logging.getLogger(__name__)
 
-def load_nifti_file(file_path):
-    """Load a NIfTI file and return its data and voxel size, reoriented to (coronal, sagittal, axial).
-
-    Parameters
-    ----------
-    file_path : str
-        Path to the NIfTI file.
-
-    Returns
-    -------
-    tuple
-        data : np.ndarray
-            The image data array, reoriented to (coronal, sagittal, axial).
-        voxel_size : np.ndarray
-            The voxel size for each axis, reordered to match the data orientation.
-
-    """
-    nifti_img = nib.load(file_path)
-    data = nifti_img.get_fdata()
-    voxel_size = np.array(nifti_img.header.get_zooms())
-
-    # determine which data-axis is world-X, world-Y, world-Z
-    codes = nib.orientations.aff2axcodes(nifti_img.affine)
-    code2world = {"L": 0, "R": 0, "P": 1, "A": 1, "I": 2, "S": 2}
-    world_of_axis = [code2world[c] for c in codes]
-    # find data-axis indices for each world axis
-    idx_x = world_of_axis.index(0)  # sagittal
-    idx_y = world_of_axis.index(1)  # coronal
-    idx_z = world_of_axis.index(2)  # axial
-
-    # we want new_data[ coronal, sagittal, axial ]
-    new_order = [idx_y, idx_x, idx_z]
-    data = np.transpose(data, new_order)
-    voxel_size = np.array(tuple(voxel_size[new_order]))
-
-    return data, voxel_size
+NIFTI_EXTENSIONS = (".nii.gz", ".nii")
 
 
-def open_gzip_file(gzip_file_path):
-    """Open a gzip-compressed file and return its content as bytes.
+@dataclass(frozen=True)
+class Case:
+    """A CT image and its structure masks in canonical (RAS+) orientation.
 
     Parameters
     ----------
-    gzip_file_path : str
-        The path to the gzip file.
-
-    Returns
-    -------
-    bytes or None
-        The content of the gzip file, or None if an error occurs.
-
-    """
-    try:
-        with gzip.open(gzip_file_path, "rb") as f_in:
-            file_content = f_in.read()
-        return file_content
-    except Exception as e:
-        print(f"Error opening {gzip_file_path}: {e}")
-        return None
-
-
-def get_image_and_voxel_size_from_gzip(gzip_file_path):
-    """Extract the image array and voxel size from a gzipped NIfTI file.
-
-    Parameters
-    ----------
-    gzip_file_path : str
-        Path to the gzipped NIfTI file.
-
-    Returns
-    -------
-    tuple
-        img_data : np.ndarray or None
-            The image data array, or None if loading fails.
-        voxel_size : np.ndarray or None
-            The voxel size for each axis, or None if loading fails.
+    case_id
+        Identifier used in logs and result tables.
+    image
+        CT in Hounsfield units, shape ``(X, Y, Z)``.
+    affine
+        4x4 voxel-to-world (RAS+, mm) matrix.
+    masks
+        Boolean masks with the same shape as ``image``, keyed by structure name.
 
     """
-    file_content = open_gzip_file(gzip_file_path)
 
-    if file_content is not None:
-        with tempfile.NamedTemporaryFile(suffix=".nii", delete=False) as temp_file:
-            temp_file.write(file_content)
-            temp_filename = temp_file.name
+    case_id: str
+    image: np.ndarray
+    affine: np.ndarray
+    masks: Mapping[str, np.ndarray] = field(default_factory=dict)
 
-        # 🔹 Debugging: Check if the file was actually written
-        try:
-            file_size = os.path.getsize(temp_filename)
-            if file_size == 0:
-                print(
-                    f"❌ Error: temp file was written but is empty! ({gzip_file_path})",
+    def __post_init__(self):
+        image = np.asarray(self.image)
+        affine = np.asarray(self.affine, dtype=float)
+        if image.ndim != 3:
+            raise ValueError(f"{self.case_id}: image must be 3D, got shape {image.shape}")
+        if affine.shape != (4, 4):
+            raise ValueError(f"{self.case_id}: affine must be 4x4, got {affine.shape}")
+        masks = {}
+        for name, mask in self.masks.items():
+            mask = np.asarray(mask)
+            if mask.shape != image.shape:
+                raise ValueError(
+                    f"{self.case_id}: mask '{name}' has shape {mask.shape}, "
+                    f"image has {image.shape}",
                 )
-                return None, None
+            masks[name] = mask.astype(bool, copy=False)
+        object.__setattr__(self, "image", image)
+        object.__setattr__(self, "affine", affine)
+        object.__setattr__(self, "masks", masks)
 
-            img_data, voxel_size = load_nifti_file(temp_filename)
-            return img_data, voxel_size
-        finally:
-            os.remove(temp_filename)
-    print(f"❌ Error: Failed to read file content from '{gzip_file_path}'")
-    return None, None
+    @property
+    def voxel_size(self) -> np.ndarray:
+        """Voxel size (mm) along the three array axes."""
+        return np.linalg.norm(self.affine[:3, :3], axis=0)
 
+    @property
+    def voxel_volume(self) -> float:
+        """Volume of one voxel in mm³."""
+        return float(abs(np.linalg.det(self.affine[:3, :3])))
 
-# def get_image_and_voxel_size_from_gzip(gzip_file_path):
-#     """Extract the image array and voxel size from a gzipped NIfTI file.
-
-#     Parameters
-#     ----------
-#     gzip_file_path : str
-#         Path to the gzipped NIfTI file.
-
-#     Returns
-#     -------
-#     tuple
-#         img_data : np.ndarray or None
-#             The image data array, or None if loading fails.
-#         voxel_size : np.ndarray or None
-#             The voxel size for each axis, or None if loading fails.
-
-#     """
-#     file_content = open_gzip_file(gzip_file_path)
-#     if file_content is not None:
-#         with open("temp_nifti.nii", "wb") as temp_file:
-#             temp_file.write(file_content)
-
-#         # 🔹 Debugging: Check if the file was actually written
-#         file_size = os.path.getsize("temp_nifti.nii")
-#         if file_size == 0:
-#             print(
-#                 f"❌ Error: 'temp_nifti.nii' was written but is empty! ({gzip_file_path})",
-#             )
-#             return None, None
-
-#         img_data, voxel_size = load_nifti_file("temp_nifti.nii")
-#         os.remove("temp_nifti.nii")  # Remove temp file after reading
-
-#         return img_data, voxel_size
-#     print(f"❌ Error: Failed to read file content from '{gzip_file_path}'")
-#     return None, None
+    def voxel_to_world(self, indices) -> np.ndarray:
+        """World coordinates (mm) of voxel indices of shape ``(N, 3)``."""
+        indices = np.asarray(indices, dtype=float)
+        return indices @ self.affine[:3, :3].T + self.affine[:3, 3]
 
 
-def load_patient_structures(
-    patient_folder: str,
-    structure_names=None,
-    structure_name_mapping=None,
-):
-    """Load specified structures from a patient folder containing NIfTI or gzipped NIfTI files.
+def _canonical(img: nib.Nifti1Image) -> nib.Nifti1Image:
+    return nib.as_closest_canonical(img)
+
+
+def _check_same_grid(reference: nib.Nifti1Image, other: nib.Nifti1Image, name: str) -> None:
+    if other.shape[:3] != reference.shape[:3]:
+        raise ValueError(f"'{name}' has shape {other.shape}, the CT has {reference.shape}")
+    if not np.allclose(other.affine, reference.affine, atol=1e-3):
+        raise ValueError(
+            f"'{name}' is not on the same voxel grid as the CT (affines differ):\n"
+            f"{other.affine}\nvs\n{reference.affine}",
+        )
+
+
+def find_files(case_dir: str | Path, names: str | Sequence[str]) -> list[Path]:
+    """NIfTI files below ``case_dir`` whose name (without extension) is one of ``names``.
+
+    Matching is case-insensitive and searches sub-directories.
+    """
+    wanted = {names.lower()} if isinstance(names, str) else {n.lower() for n in names}
+    found = []
+    for root, _, files in os.walk(case_dir):
+        for f in files:
+            for ext in NIFTI_EXTENSIONS:
+                if f.lower().endswith(ext) and f[: -len(ext)].lower() in wanted:
+                    found.append(Path(root) / f)
+                    break
+    return sorted(found)
+
+
+def _find_one(case_dir, names, what: str) -> Path | None:
+    files = find_files(case_dir, names)
+    if len(files) > 1:
+        listed = "\n  ".join(str(f) for f in files)
+        raise ValueError(f"Several files match {what} {names!r}:\n  {listed}")
+    return files[0] if files else None
+
+
+def load_case(
+    case_dir: str | Path,
+    image: str | Sequence[str] = "CT",
+    structures: Mapping[str, str | Sequence[str]] | None = None,
+    case_id: str | None = None,
+) -> Case:
+    """Load the CT and structure masks of one case from a directory of NIfTI files.
 
     Parameters
     ----------
-    patient_folder : str
-        Path to the folder containing patient structure files.
-    structure_names : list of str, optional
-        List of structure names to load (default: ['Image']).
+    case_dir
+        Directory with the case's NIfTI files (sub-directories are searched too).
+    image
+        File name of the CT without extension, or several alternatives.
+    structures
+        Structure name -> file name(s) without extension, e.g.
+        ``{"GTVp": "ROI__[GTVp]", "Body": "ROI__[EXTERNAL]"}``. Structures without
+        a matching file are skipped (with a log message); use ``case.masks`` to check.
+    case_id
+        Defaults to the directory name.
 
-    Returns
-    -------
-    dict
-        Dictionary mapping structure names to (image, voxel_size) tuples.
+    Raises
+    ------
+    FileNotFoundError
+        If no CT is found.
+    ValueError
+        If a name matches several files or a mask is not on the CT's voxel grid.
 
     """
-    if structure_names is None:
-        structure_names = ["Image"]
+    case_dir = Path(case_dir)
+    if not case_dir.is_dir():
+        raise FileNotFoundError(f"Case directory not found: {case_dir}")
+    image_path = _find_one(case_dir, image, "the image")
+    if image_path is None:
+        raise FileNotFoundError(f"No CT named {image!r} (.nii/.nii.gz) found in {case_dir}")
 
-    search_names = {}
+    ct = nib.load(image_path)
+    masks = {}
+    for name, file_names in (structures or {}).items():
+        path = _find_one(case_dir, file_names, f"structure '{name}'")
+        if path is None:
+            logger.info("%s: structure '%s' not found", case_id or case_dir.name, name)
+            continue
+        mask_img = nib.load(path)
+        _check_same_grid(ct, mask_img, name)
+        masks[name] = np.asanyarray(_canonical(mask_img).dataobj) > 0.5
 
-    if structure_name_mapping is not None:
-        for file_name, standard_name in structure_name_mapping.items():
-            if standard_name in structure_names:
-                # print(standard_name)
-                search_names[file_name] = standard_name
-    else:
-        search_names = {name: name for name in structure_names}
-    struct_dict = {}
-    for root, _, files in os.walk(patient_folder):
-        for f in files:
-            # Only NIfTI files
-            if not (f.endswith(".nii.gz") or f.endswith(".nii")):
-                continue
-
-            name_part = f
-
-            # Remove extension
-            if name_part.endswith(".nii.gz"):
-                base = name_part[:-7]
-            else:
-                base = name_part[:-4]
-
-            # Compare with expected structure names (case-insensitive)
-            for file_name, standard_name in search_names.items():
-                if base.lower() == file_name.lower():
-                    file_path = os.path.join(root, f)
-                    try:
-                        if f.endswith(".nii.gz"):
-                            img, voxel_size = get_image_and_voxel_size_from_gzip(
-                                file_path,
-                            )
-                        else:
-                            img, voxel_size = load_nifti_file(file_path)
-                    except Exception as e:
-                        logging.error(
-                            f"Error loading '{standard_name}' from {file_path}: {e}",
-                        )
-                        continue
-
-                    if img is not None:
-                        struct_dict[standard_name] = (img, voxel_size)
-                        print(f"Loaded '{standard_name}' from {file_path}")
-                    break
-    return struct_dict
-
-
-def load_crop_info(output_path):
-    crop_info_path = os.path.join(output_path, "crop_info.npy")
-
-    if os.path.exists(crop_info_path):
-        crop_data = np.load(crop_info_path, allow_pickle=True).item()
-        return crop_data.get("crop_info", None)
-
-    return None
+    ct = _canonical(ct)
+    return Case(
+        case_id=case_id or case_dir.name,
+        image=ct.get_fdata(dtype=np.float32),
+        affine=ct.affine,
+        masks=masks,
+    )

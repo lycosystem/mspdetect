@@ -1,331 +1,162 @@
-import functools
-import os
-from multiprocessing import Pool
-from pathlib import Path
+"""Metrics of structures relative to the mid-sagittal plane.
+
+Distances are signed distances of voxel centres to the plane: positive on the
+patient's right, negative on the patient's left (see :class:`~mspdetect.plane.Plane`).
+Volumes are in cc (= cm³ = ml), distances in mm.
+
+Left/right volumes are computed either for the whole structure or only within a range
+of slices, typically the slices used to detect the plane
+(:attr:`~mspdetect.detect.MSPResult.crop_slices`).
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
 
 import numpy as np
-import pandas as pd
-from loguru import logger
-from scipy.spatial import ConvexHull, distance
-from tqdm import tqdm
+from scipy.spatial import ConvexHull, QhullError
+from scipy.spatial.distance import pdist
 
-from mspdetect import geometry, io, optimization, pipeline, preprocessing
-
-
-def extract_metrics(
-    distances,
-    voxel_volume,
-):
-    if len(distances) > 0:
-        mean = np.mean(distances)
-        std = np.std(distances)
-        maxval = np.max(distances)
-        minval = np.min(distances)
-        volume = len(distances) * voxel_volume
-    else:
-        mean, std, maxval, minval, volume = 0, 0, 0, 0, 0
-
-    return {
-        "volume": volume,
-        "min": minval,
-        "max": maxval,
-        "mean": mean,
-        "std": std,
-    }
+from mspdetect.io import Case
+from mspdetect.plane import Plane
+from mspdetect.preprocessing import SLICE_AXIS
 
 
-def load_patient_plane_params(result_path, struct_dict, pipeline_config, voxel_size):
-    # Try to load full-image parameters
-    full_param_path = os.path.join(result_path, "optimized_parameter_full_image.npy")
-
-    if os.path.exists(full_param_path):
-        return np.load(full_param_path, mmap_mode="r").copy()
-
-    # Use cropped params and convert
-    cropped_param_path = os.path.join(result_path, "parameter_array.npy")
-    if not os.path.exists(cropped_param_path):
-        raise FileNotFoundError(f"No parameter files found in {result_path}")
-
-    params_cropped = np.load(cropped_param_path, mmap_mode="r")[-1].copy()
-
-    struct_dict_cropped, _, crop_info = preprocessing.crop_patient_volumes(
-        struct_dict,
-        pipeline_config["slice_axis"],
-        pipeline_config["slice_range"],
-        pipeline_config["margins"],
-        pipeline_config["reference"],
-        pipeline_config["crop_mode"],
-        pipeline_config["fixed_size"],
-        pipeline_config.get("exclude_mandible", False),
-        pipeline_config.get("crop_shoulders", None),
-    )
-
-    return geometry.crop_to_full_coords(
-        params_cropped,
-        crop_info,
-        voxel_size,
-    )
+def _voxels(case: Case, structure: str, slices: tuple[int, int] | None) -> np.ndarray:
+    indices = np.argwhere(case.masks[structure])
+    if slices is not None:
+        z = indices[:, SLICE_AXIS]
+        indices = indices[(z >= slices[0]) & (z < slices[1])]
+    return indices
 
 
-def get_max_distance(mask, voxel_size):
-    points_idx = np.argwhere(mask)
-
-    if points_idx.shape[0] < 2:
-        return 0
-
-    physical_points = points_idx * np.array(voxel_size)
-    if physical_points.shape[0] > 2:
-        try:
-            hull = ConvexHull(physical_points)
-            hull_points = physical_points[hull.vertices]
-        except Exception:
-            hull_points = physical_points
-    else:
-        hull_points = physical_points
-
-    dists = distance.pdist(hull_points, metric="euclidean")
-    max_dist = np.max(dists)
-
-    return max_dist
+def signed_distances(
+    case: Case,
+    plane: Plane,
+    structure: str,
+    slices: tuple[int, int] | None = None,
+) -> np.ndarray:
+    """Signed distance (mm) of every voxel of ``structure`` (within ``slices``) to ``plane``."""
+    return plane.signed_distance_voxels(_voxels(case, structure, slices), case.affine)
 
 
-def calculate_metrics_for_patient(
-    patient_path,
-    result_path,
-    pipeline_config,
-):
-    structure_name_mapping = pipeline_config.get("structure_name_mapping")
+def side_volumes(
+    case: Case,
+    plane: Plane,
+    structure: str,
+    slices: tuple[int, int] | None = None,
+) -> tuple[float, float]:
+    """Volume (cc) of ``structure`` on the patient's left and right of ``plane``.
 
-    struct_dict = io.load_patient_structures(
-        patient_path,
-        structure_names=["GTVp", "Image"],
-        structure_name_mapping=structure_name_mapping,
-    )
-    print(patient_path)
+    With ``slices = (start, stop)``, only the part of the structure within these
+    slices is counted. Voxels whose centre lies exactly on the plane are not counted.
+    """
+    d = signed_distances(case, plane, structure, slices)
+    cc = case.voxel_volume / 1000  # mm³ -> cc
+    return float(np.count_nonzero(d < 0) * cc), float(np.count_nonzero(d > 0) * cc)
 
-    if "GTVp" not in struct_dict:
-        print("no GTVp")
-        return None
 
-    if not struct_dict:
-        logger.warning(f"No matching files found in {patient_path}. Skipping...")
-        return None
+def max_diameter(case: Case, structure: str) -> float:
+    """Largest distance (mm) between two voxel centres of ``structure``."""
+    points = case.voxel_to_world(np.argwhere(case.masks[structure]))
+    if len(points) < 2:
+        return 0.0
+    try:
+        points = points[ConvexHull(points).vertices]
+    except QhullError:
+        pass  # degenerate (e.g. flat) structure: use all points
+    return float(pdist(points).max())
 
-    voxel_size = struct_dict["Image"][1]
 
-    # Try to load full-image parameters
-    full_param_path = os.path.join(result_path, "optimized_parameter_full_image.npy")
+def target_metrics(case: Case, plane: Plane, structure: str = "GTVp") -> dict:
+    """Laterality and extent of a target structure relative to the plane.
 
-    # if os.path.exists(full_param_path):
-    #     params = np.load(full_param_path, mmap_mode="r").copy()
-    # else:
-    #     # Use cropped params and convert
-    #     cropped_param_path = os.path.join(result_path, "parameter_array.npy")
-    #     params_cropped = np.load(cropped_param_path, mmap_mode="r")[-1].copy()
+    Returns
+    -------
+    dict
+        - ``side``: ``"left"``/``"right"``: side containing the larger volume
+          (``"central"`` if equal).
+        - ``crosses_midline``: whether the structure has voxels on both sides.
+        - ``distance_msp_mm``: if crossing, how far the structure extends into the
+          side with the smaller volume (positive); otherwise minus the gap between
+          the plane and the closest voxel (negative).
+        - ``lateral_extent_mm``: extent of the structure perpendicular to the plane.
+        - ``left_max_mm`` / ``right_max_mm``: largest distance from the plane on each
+          side (0 if no voxels on that side).
+        - ``max_diameter_mm``: largest distance between two voxels.
 
-    #     struct_dict_cropped, _, crop_info = preprocessing.crop_patient_volumes(
-    #         struct_dict,
-    #         pipeline_config["slice_axis"],
-    #         pipeline_config["slice_range"],
-    #         pipeline_config["margins"],
-    #         pipeline_config["reference"],
-    #         pipeline_config["crop_mode"],
-    #         pipeline_config["fixed_size"],
-    #         pipeline_config.get("exclude_mandible", False),
-    #         pipeline_config.get("crop_shoulders", None),
-    #     )
+    """
+    d = signed_distances(case, plane, structure)
+    if d.size == 0:
+        raise ValueError(f"{case.case_id}: structure '{structure}' is empty")
+    left, right = -d[d < 0], d[d > 0]
 
-    #     params = geometry.crop_to_full_coords(
-    #         params_cropped,
-    #         crop_info,
-    #         voxel_size,
-    #     )
-
-    params = load_patient_plane_params(
-        result_path,
-        struct_dict,
-        pipeline_config,
-        voxel_size,
-    )
-
-    logger.info(f"loaded params {params}")
-
-    # Compute distances
-    d, normal, indices_coord_syst, indices_image = (
-        optimization.compute_signed_distances(
-            params,
-            struct_dict["GTVp"][0],
-            voxel_size,
-        )
-    )
-    voxel_volume = np.prod(voxel_size)
-
-    # dictionary to save results
-    metrics_dict = {"info": {}}
-
-    gtv_mask = struct_dict["GTVp"][0]
-    max_dist = get_max_distance(gtv_mask, voxel_size)
-    metrics_dict["info"]["max_dist"] = max_dist
-
-    idx_left = np.nonzero(d > 0)
-    idx_right = np.nonzero(d < 0)
-
-    metrics_dict["right"] = extract_metrics(np.absolute(d[idx_right]), voxel_volume)
-    metrics_dict["left"] = extract_metrics(
-        np.absolute(d[idx_left]),
-        voxel_volume,
-    )
-
-    # determine the side
-    if metrics_dict["left"]["volume"] > metrics_dict["right"]["volume"]:
+    if left.size > right.size:
         side = "left"
-    elif metrics_dict["right"]["volume"] > metrics_dict["left"]["volume"]:
+    elif right.size > left.size:
         side = "right"
     else:
         side = "central"
-    metrics_dict["info"]["side"] = side
 
-    # calculate extension / distance to midline
-    if (metrics_dict["left"]["volume"] > 0) & (metrics_dict["right"]["volume"] > 0):
-        metrics_dict["info"]["extension"] = True
-        if side in ["right", "central"]:
-            distance_msp = metrics_dict["left"]["max"]
-        else:
-            distance_msp = metrics_dict["right"]["max"]
-        max_dist_sagittal = metrics_dict["left"]["max"] + metrics_dict["right"]["max"]
+    crosses = left.size > 0 and right.size > 0
+    if crosses:
+        distance = left.max() if side in ("right", "central") else right.max()
+        extent = left.max() + right.max()
     else:
-        metrics_dict["info"]["extension"] = False
-        distance_msp = -metrics_dict[side]["min"]
-        max_dist_sagittal = metrics_dict[side]["max"] - metrics_dict[side]["min"]
-    metrics_dict["info"]["distance_msp"] = distance_msp
-    metrics_dict["info"]["max_dist_sagittal"] = max_dist_sagittal
+        on_side = left if left.size else right
+        distance = -on_side.min() if on_side.size else 0.0
+        extent = on_side.max() - on_side.min() if on_side.size else 0.0
 
-    return metrics_dict
-
-
-def _process_patient_wrapper(
-    row_iter,
-    base_path,
-    output_path,
-    pipeline_config,
-):
-    _, row = row_iter
-    try:
-        # get patient path
-        patient_path = base_path / row["dataset"] / str(row["patient"])
-        # get result path
-        result_path = output_path / row["dataset"] / str(row["patient"])
-        patient_metrics = calculate_metrics_for_patient(
-            patient_path,
-            result_path,
-            pipeline_config,
-        )
-        return (row["patient"], patient_metrics)
-    except Exception as e:
-        patient = row["patient"]
-        logger.error(f"Error processing {patient}: {e}")
-        return (row["patient"], None)
+    return {
+        "side": side,
+        "crosses_midline": bool(crosses),
+        "distance_msp_mm": float(distance),
+        "lateral_extent_mm": float(extent),
+        "left_max_mm": float(left.max()) if left.size else 0.0,
+        "right_max_mm": float(right.max()) if right.size else 0.0,
+        "max_diameter_mm": max_diameter(case, structure),
+    }
 
 
-def pipeline_metrics_computation(
-    config_path: str | None,
-    log_file: Path | None,
-    base_path: Path | None = None,
-    output_path: Path | None = None,
-    result_path: Path | None = None,
-):
-    config = pipeline.load_config(config_path)
+def compute_metrics(
+    case: Case,
+    plane: Plane,
+    structures: Sequence[str] = (),
+    target: str | None = "GTVp",
+    slices: tuple[int, int] | None = None,
+) -> dict:
+    """All metrics of a case as a flat dictionary (one row of a results table).
 
-    pipeline_config = config["pipeline"]
+    Parameters
+    ----------
+    case
+        Case with the masks of ``structures`` and ``target``.
+    plane
+        Detected plane, e.g. ``detect_msp(case).plane``.
+    structures
+        Structures whose left/right volumes are computed. Missing structures give NaN.
+    target
+        Structure for :func:`target_metrics` (columns prefixed with its name), or None.
+        Target metrics always use the whole target.
+    slices
+        ``(start, stop)``: count volumes only within these slices (full left-right and
+        anterior-posterior extent), e.g. ``result.crop_slices`` for the slices used to
+        detect the plane. None: whole structures.
 
-    log_csv = pd.read_csv(log_file, header=[0])
+    """
+    if target is not None and target not in case.masks:
+        raise ValueError(f"{case.case_id}: target structure '{target}' not loaded")
+    row = {"case_id": case.case_id}
+    if slices is not None:
+        row["slab_start"], row["slab_stop"] = int(slices[0]), int(slices[1])
 
-    if base_path is None:
-        base_path = Path(
-            "/home/noemibuhrer/Datasets/RADCURE/DATASETS_NII",
-        )  # Update this to your actual base path
-    if output_path is None:
-        output_path = Path(
-            "/home/noemibuhrer/Datasets/RADCURE/msp_results/final",
-        )  # Directory where files will be organized
-    result_dict = {}
-    num_processes = 4
-
-    process_func = functools.partial(
-        _process_patient_wrapper,
-        base_path=base_path,
-        output_path=output_path,
-        pipeline_config=pipeline_config,
-    )
-    # for patient_id, row in tqdm(log_csv.iterrows(), total=len(log_csv)):
-    #     # get patient path
-    #     patient_path = base_source_path / row["dataset"] / row["patient"]
-    #     # get result path
-    #     result_path = output_base_path / row["dataset"] / row["patient"]
-
-    #     patient_dict = calculate_metrics_for_patient(
-    #         patient_path,
-    #         result_path,
-    #         pipeline_config
-    #     )
-    #     if patient_dict:
-    #         patient_dict["info"]["patient"] = row["patient"]
-    #     else:
-    #         patient_dict = {"info": {"patient": row["patient"]}}
-
-    #     multilevel_dict = {(level2, level3): value
-    #                             for level2, inner_inner_dict in patient_dict.items()
-    #                             for level3, value in inner_inner_dict.items()}
-
-    #     result_dict[patient_id] = multilevel_dict
-    if num_processes == 1:
-        for row_iter in tqdm(
-            log_csv.iterrows(),
-            total=len(log_csv),
-            desc="Extract metrics",
-        ):
-            patient, patient_dict = process_func(row_iter)
-            if patient_dict:
-                patient_dict["info"]["patient"] = patient
-            else:
-                patient_dict = {"info": {"patient": patient}}
-            multilevel_dict = {
-                (level2, level3): value
-                for level2, inner_inner_dict in patient_dict.items()
-                for level3, value in inner_inner_dict.items()
-            }
-
-            result_dict[patient] = multilevel_dict
-    else:
-        with Pool(processes=num_processes) as pool:
-            results = list(
-                tqdm(
-                    pool.imap(process_func, log_csv.iterrows()),
-                    total=len(log_csv),
-                    desc="Extract metrics",
-                ),
+    for name in structures:
+        if name in case.masks:
+            row[f"{name}_left_cc"], row[f"{name}_right_cc"] = side_volumes(
+                case, plane, name, slices
             )
-
-        for patient, patient_dict in results:
-            if patient_dict:
-                patient_dict["info"]["patient"] = patient
-            else:
-                patient_dict = {"info": {"patient": patient}}
-            multilevel_dict = {
-                (level2, level3): value
-                for level2, inner_inner_dict in patient_dict.items()
-                for level3, value in inner_inner_dict.items()
-            }
-
-            result_dict[patient] = multilevel_dict
-
-    df = pd.DataFrame.from_dict(result_dict, orient="index")
-    df.columns = pd.MultiIndex.from_tuples(
-        df.columns,
-    )
-    # save csv
-    df.to_csv(
-        "/home/noemibuhrer/Projects/RADCURE-analysis/msp_pipeline/logs/metrics.csv",
-        index=False,
-    )
-    df.to_csv(result_path, index=False)
+        else:
+            row[f"{name}_left_cc"] = row[f"{name}_right_cc"] = float("nan")
+    if target is not None:
+        row.update({f"{target}_{k}": v for k, v in target_metrics(case, plane, target).items()})
+    return row
