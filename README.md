@@ -15,7 +15,7 @@ across a candidate plane and compared with the CT intensity at the mirrored posi
 Requires Python ≥ 3.10.
 
 ```bash
-pip install "mspdetect[viz] @ git+https://github.com/noemibuehrer/msp-detection-ct"
+pip install "mspdetect[viz] @ git+https://github.com/lycosystem/mspdetect"
 ```
 
 `[viz]` adds plotting (matplotlib, ipywidgets) and can be omitted.
@@ -82,4 +82,4 @@ See the [documentation](https://mspdetect.readthedocs.io/en/stable/conventions.h
 
 ## Citation
 
-If you use mspdetect, please cite the article in [`CITATION.cff`](https://github.com/noemibuehrer/msp-detection-ct/blob/main/CITATION.cff).
+If you use mspdetect, please cite the article in [`CITATION.cff`](https://github.com/lycosystem/mspdetect/blob/main/CITATION.cff).

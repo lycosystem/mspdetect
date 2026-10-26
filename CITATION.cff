@@ -3,7 +3,7 @@ message: "If you use this software, please cite the article below."
 title: "mspdetect: mid-sagittal plane detection in head and neck planning CTs"
 type: software
 license: MIT
-repository-code: "https://github.com/noemibuehrer/msp-detection-ct"
+repository-code: "https://github.com/lycosystem/mspdetect"
 authors:
   - family-names: Keller
     given-names: Loris

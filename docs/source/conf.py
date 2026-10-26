@@ -9,10 +9,10 @@ import mspdetect
 # -- Project information -----------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#project-information
 
-project = "msp-detection-ct"
+project = "mspdetect"
 copyright = "2026, Noemi Bührer"  # noqa: A001
 author = "Loris Keller, Yoel Pérez Haas, Noemi Bührer"
-gh_username = "noemibuehrer"
+gh_username = "lycosystem"
 version = mspdetect.__version__
 release = mspdetect.__version__
 

@@ -49,7 +49,7 @@ docs = [
 ]
 
 [project.urls]
-source = "https://github.com/noemibuehrer/msp-detection-ct"
+source = "https://github.com/lycosystem/mspdetect"
 documentation = "https://mspdetect.readthedocs.io"
 
 [project.scripts]
