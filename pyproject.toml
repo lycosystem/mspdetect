@@ -36,6 +36,7 @@ viz = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov",
     "ruff>=0.12",
     "pre-commit",
     "git-cliff",
@@ -64,6 +65,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+relative_files = true
 
 [tool.ruff]
 line-length = 100
