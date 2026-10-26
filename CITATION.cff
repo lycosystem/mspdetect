@@ -1,0 +1,22 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite the article below."
+title: "mspdetect: mid-sagittal plane detection in head and neck planning CTs"
+type: software
+license: MIT
+repository-code: "https://github.com/lycosystem/mspdetect"
+authors:
+  - family-names: Keller
+    given-names: Loris
+  - family-names: Pérez Haas
+    given-names: Yoel
+  - family-names: Bührer
+    given-names: Noemi
+# TODO: fill in once the article is published
+preferred-citation:
+  type: article
+  title: "TODO: article title"
+  authors:
+    - family-names: Bührer
+      given-names: Noemi
+  journal: "TODO"
+  year: 2026

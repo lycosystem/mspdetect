@@ -1,71 +1,93 @@
 [build-system]
-requires = ["setuptools >= 61.0.0", "setuptools_scm >= 7.0.0", "wheel"]
+requires = ["setuptools >= 64", "setuptools_scm >= 8"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mspdetect"
-description = "Package for mid-sagittal plane detection."
+description = "Automatic mid-sagittal plane detection in head and neck planning CTs."
 authors = [
     {name = "Loris Keller"},
     {name = "Yoel Pérez Haas"},
     {name = "Noemi Bührer"},
 ]
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+]
 dependencies = [
-    "numpy",
-    "pandas",
-    "matplotlib",
-    "imageio",
-    "nibabel",
-    "scipy",
-    "joblib",
-    "ipywidgets",
-    "ipympl",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "nibabel>=5.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.60",
 ]
 dynamic = ["version"]
 
 [project.optional-dependencies]
+viz = [
+    "matplotlib>=3.7",
+    "ipywidgets>=8.0",
+]
 dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff>=0.12",
     "pre-commit",
     "git-cliff",
 ]
+docs = [
+    "sphinx",
+    "sphinx-book-theme",
+    "myst-parser",
+    "autodoc_pydantic",
+    "sphinxcontrib-programoutput",
+]
+
+[project.urls]
+source = "https://github.com/lycosystem/mspdetect"
+documentation = "https://mspdetect.readthedocs.io"
+
+[project.scripts]
+mspdetect = "mspdetect.cli:main"
 
 [tool.setuptools_scm]
-write_to = "src/mspdetect/_version.py"
+version_file = "src/mspdetect/_version.py"
 local_scheme = "no-local-version"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
-[tool.coverage.paths]
-source = [
-    "src/",
-    "**/site-packages/",
-]
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+relative_files = true
+
+[tool.ruff]
+line-length = 100
 
 [tool.ruff.lint]
-select = [
-    "E",
-    "F",
-    "W",
-    "B",
-    "C",
-    "R",
-    "U",
-    "D",
-    "I",
-    "S",
-    "T",
-    "A",
-    "N",
-    "COM",
-    "FURB",
-    "NPY",
-    "UP",
+select = ["E", "F", "W", "B", "C4", "D", "I", "N", "NPY", "UP", "S", "T20"]
+ignore = [
+    "B028",
+    "D105",  # magic methods
+    "D107",  # __init__
+    "D401",  # docstrings may start with a noun phrase
+    "N803",  # argument names like `I_m`
+    "N806",
 ]
-ignore = ["B028"]
 
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D", "S101"]
 
 [tool.git-cliff.changelog]
 # changelog header
@@ -132,7 +154,7 @@ filter_commits = false
 # glob pattern for matching git tags
 tag_pattern = "[0-9]*"
 # regex for skipping tags
-skip_tags = "v0.1.0-beta.1"
+skip_tags = ""
 # regex for ignoring tags
 ignore_tags = ""
 # sort the tags topologically

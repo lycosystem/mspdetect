@@ -1,179 +1,181 @@
-"""This module defines functions for preprocessing the CT images"""
+"""Cropping and bone extraction before the plane is fitted.
 
-import os
+All functions work on a :class:`~mspdetect.io.Case` in canonical orientation: axis 0
+is left→right (lateral), axis 2 is inferior→superior (slices).
+"""
+
+from __future__ import annotations
+
+import logging
 import time
+from dataclasses import dataclass
 
-import joblib
 import numpy as np
 import scipy as sp
 
+from mspdetect.config import CropConfig, DetectionConfig
+from mspdetect.io import Case
+from mspdetect.plane import array_frame
 
-def mask_via_threshold(ct_image, HU_range=(300, 1500)):
-    """Create a binary mask for the CT image using a specified Hounsfield Unit (HU) range.
+logger = logging.getLogger(__name__)
 
-    Parameters
-    ----------
-    ct_image : np.ndarray
-        The CT image array.
-    HU_range : tuple of (int, int)
-        Lower and upper HU bounds for thresholding.
+LATERAL_AXIS = 0
+SLICE_AXIS = 2
+# Slices of the mandible included when the reference ends just below it
+MANDIBLE_SLICES = 5
 
-    Returns
-    -------
-    np.ndarray
-        Binary mask where voxels within the HU range are set to 1.
 
+@dataclass(frozen=True)
+class CropBox:
+    """Voxel box ``[start, stop)`` along each array axis."""
+
+    start: tuple[int, int, int]
+    stop: tuple[int, int, int]
+
+    @property
+    def slices(self) -> tuple[slice, slice, slice]:
+        """Index expression selecting the box from an array."""
+        return tuple(slice(a, b) for a, b in zip(self.start, self.stop, strict=True))
+
+    @property
+    def shape(self) -> tuple[int, int, int]:
+        """Shape of the cropped array."""
+        return tuple(b - a for a, b in zip(self.start, self.stop, strict=True))
+
+    def to_dict(self) -> dict:
+        """JSON-serialisable representation."""
+        return {"start": list(self.start), "stop": list(self.stop)}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> CropBox:
+        """Inverse of :meth:`to_dict`."""
+        return cls(tuple(data["start"]), tuple(data["stop"]))
+
+
+@dataclass(frozen=True)
+class PreparedCase:
+    """Input of the optimizer.
+
+    Coordinates are in the *crop frame*: array axes in mm with the origin at the first
+    voxel of ``crop``. ``R`` and ``t`` map them to world coordinates
+    (``world = R @ p + t``).
     """
-    bone_mask = np.zeros_like(ct_image)
-    lower_bound, upper_bound = HU_range
-    bone_mask[(ct_image >= lower_bound) & (ct_image <= upper_bound)] = 1
 
-    return bone_mask
+    bone: np.ndarray
+    interpolator: sp.interpolate.RegularGridInterpolator
+    voxel_size: np.ndarray
+    crop: CropBox
+    R: np.ndarray
+    t: np.ndarray
 
 
-def crop_patient_volumes(struct_dict, slice_axis=2, slice_range=None):
-    """Crop all structures in the patient dictionary along a specified axis and range.
+def _extent(mask: np.ndarray, axis: int) -> tuple[int, int] | None:
+    """First and last+1 index along ``axis`` where ``mask`` is non-zero."""
+    other = tuple(a for a in range(mask.ndim) if a != axis)
+    idx = np.flatnonzero(mask.any(axis=other))
+    return (int(idx[0]), int(idx[-1]) + 1) if idx.size else None
 
-    Parameters
-    ----------
-    struct_dict : dict
-        Dictionary of structures, each as (image, voxel_size) or image array.
-    slice_axis : int
-        Axis along which to crop (default: 2, axial).
-    slice_range : tuple or None
-        (start, end) indices for cropping. If None, uses GTVp mask or full range.
 
-    Returns
-    -------
-    dict
-        Dictionary with cropped structure arrays.
-
-    """
-    image = struct_dict["Image"][0]
-    if "GTVp" in struct_dict:
-        gtvp = struct_dict["GTVp"][0]
-        slc = sp.ndimage.find_objects(gtvp.astype(bool))[0]
-        start, end = slc[slice_axis].start, slc[slice_axis].stop - 1
-    elif slice_range is not None:
-        start, end = slice_range
+def slice_bounds(case: Case, crop: CropConfig) -> tuple[int, int]:
+    """Slice range ``[start, stop)`` used to fit the plane."""
+    n_slices = case.image.shape[SLICE_AXIS]
+    if crop.slice_range is not None:
+        start, stop = crop.slice_range
+    elif crop.reference is None:
+        start, stop = 0, n_slices
     else:
-        start, end = 0, image.shape[slice_axis] - 1
+        if crop.reference not in case.masks:
+            raise ValueError(
+                f"{case.case_id}: crop reference '{crop.reference}' not loaded. Provide "
+                "it, or set crop.reference to null to use the whole scan.",
+            )
+        extent = _extent(case.masks[crop.reference], SLICE_AXIS)
+        if extent is None:
+            raise ValueError(f"{case.case_id}: crop reference '{crop.reference}' is empty")
+        start, stop = extent
 
-    if "Mandible" in struct_dict:
-        mandible = struct_dict["Mandible"][0]
-        mandible_slices = sp.ndimage.find_objects(mandible.astype(bool))
-        if mandible_slices:
-            mandible_slice = mandible_slices[0][slice_axis]
-            mandible_start = mandible_slice.start
-            if end <= mandible_start + 5:
-                mandible_stop_lower = mandible_start + 5
-                start = min(start, mandible_slice.start)
-                end = max(end, mandible_stop_lower)
+        if crop.include_mandible and "Mandible" in case.masks:
+            mandible = _extent(case.masks["Mandible"], SLICE_AXIS)
+            if mandible is not None and stop - 1 <= mandible[0] + MANDIBLE_SLICES:
+                start = min(start, mandible[0])
+                stop = max(stop, mandible[0] + MANDIBLE_SLICES + 1)
 
-    idx = np.arange(start, end + 1)
+        if crop.mode == "margins":
+            below, above = (
+                (crop.margins, crop.margins) if isinstance(crop.margins, int) else crop.margins
+            )
+            start, stop = start - below, stop + above
+        elif stop - 1 - start <= 2 * crop.fixed_size:
+            centre = (start + stop - 1) // 2
+            start, stop = centre - crop.fixed_size, centre + crop.fixed_size + 1
 
-    def _crop(arr, idx):
-        return np.take(arr, idx, axis=slice_axis)
-
-    for structure in struct_dict:
-        struct_dict[structure] = _crop(struct_dict[structure][0], idx)
-
-    idx_interpolation = np.arange(start - 10, end + 1 + 10)
-    interpolation_image = _crop(image, idx_interpolation)
-
-    return struct_dict, interpolation_image
-
-
-def preprocess_bone_image(struct_dict, HU_range):
-    """Preprocess the CT image to extract bone regions using a HU threshold and optional body mask.
-
-    Parameters
-    ----------
-    struct_dict : dict
-        Dictionary of structures, must include 'Image' and optionally 'Body'.
-    HU_range : tuple of (int, int)
-        Lower and upper HU bounds for bone thresholding.
-
-    Returns
-    -------
-    tuple
-        proc_image : np.ndarray
-            The processed CT image (optionally masked by 'Body').
-        bone_ct : np.ndarray
-            The CT image with only bone voxels retained.
-
-    """
-    proc_image = struct_dict["Image"].astype(np.int16)
-
-    if "Body" in struct_dict:
-        body = struct_dict["Body"]
-        proc_image = np.where(body == 1, proc_image, np.min(proc_image))
-
-    bone_mask = mask_via_threshold(proc_image, HU_range).astype(np.uint16)
-    bone_ct = proc_image * bone_mask
-
-    return proc_image, bone_ct
+    start, stop = max(0, start), min(n_slices, stop)
+    if start >= stop:
+        raise ValueError(f"{case.case_id}: empty slice range [{start}, {stop})")
+    return start, stop
 
 
-def get_cached_interpolator(
-    output_dir,
-    image,
-    voxel_size,
-    filename="interpolator.joblib",
-    method="cubic",
-    pad_slices=10,
-):
-    """Load or build and cache a RegularGridInterpolator for a cropped+Padded volume,
-    shifting the z‐coordinates so that z=0 aligns with the first slice of the original crop.
+def lateral_bounds(case: Case, crop: CropConfig) -> tuple[int, int]:
+    """Left-right range ``[start, stop)`` used to fit the plane (shoulder removal)."""
+    n = case.image.shape[LATERAL_AXIS]
+    if crop.lateral_extent_mm is None:
+        return 0, n
+    extent = _extent(case.masks["Body"], LATERAL_AXIS) if "Body" in case.masks else None
+    centre = (extent[0] + extent[1] - 1) // 2 if extent else n // 2
+    half = int(crop.lateral_extent_mm / case.voxel_size[LATERAL_AXIS]) // 2
+    return max(0, centre - half), min(n, centre + half)
 
-    Parameters
-    ----------
-    output_dir : str
-        Directory to look for/save the cached interpolator.
-    image : np.ndarray
-        Cropped+Padded image of shape (Ny, Nx, Nz_pad).
-    voxel_size : sequence of 3 floats
-        Physical spacing in mm along (Y, X, Z) axes.
-    filename : str, optional
-        Name of the .joblib file to load/save under output_dir.
-    method : str, optional
-        Interpolation method: 'cubic', 'linear', etc.
-    pad_slices : int, optional
-        Number of padded slices at the beginning of the volume. These
-        will be assigned negative z-coordinates.
 
-    Returns
-    -------
-    RegularGridInterpolator
-        Interpolator mapping (y_mm, x_mm, z_mm_shifted) to intensity,
-        where z_mm_shifted = 0 at the first slice *after* the pad.
+def crop_box(case: Case, crop: CropConfig) -> CropBox:
+    """Box of the case used to fit the plane."""
+    x0, x1 = lateral_bounds(case, crop)
+    z0, z1 = slice_bounds(case, crop)
+    return CropBox((x0, 0, z0), (x1, case.image.shape[1], z1))
 
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    interpolator_path = os.path.join(output_dir, filename)
 
-    Ny, Nx, Nz_pad = image.shape
-    dy, dx, dz = voxel_size
+def bone_image(image: np.ndarray, hu_range, body: np.ndarray | None = None) -> np.ndarray:
+    """Keep voxels with HU in ``hu_range`` (inside ``body``, if given); zero elsewhere."""
+    if body is not None:
+        image = np.where(body, image, image.min())
+    low, high = hu_range
+    return np.where((image >= low) & (image <= high), image, 0).astype(np.float32)
 
-    # build physical‐space sample grids
-    grid_y = np.arange(Ny) * dy
-    grid_x = np.arange(Nx) * dx
-    # shift z so that first un‐padded slice is at z=0
-    grid_z = (np.arange(Nz_pad) - pad_slices) * dz
 
-    if os.path.exists(interpolator_path):
-        interpolator = joblib.load(interpolator_path)
-    else:
-        start = time.time()
-        interpolator = sp.interpolate.RegularGridInterpolator(
-            (grid_y, grid_x, grid_z),
-            image,
-            method=method,
-            bounds_error=False,
-            fill_value=None,
-        )
-        elapsed = time.time() - start
-        print(f"Interpolator built in {elapsed:.2f}s; cached to {interpolator_path}")
-        joblib.dump(interpolator, interpolator_path)
-
+def build_interpolator(
+    case: Case, box: CropBox, pad: int
+) -> sp.interpolate.RegularGridInterpolator:
+    """Cubic interpolator of the CT in the crop frame, on the box padded by ``pad`` voxels."""
+    start = time.perf_counter()
+    lo = [max(0, a - pad) for a in box.start]
+    hi = [min(n, b + pad) for b, n in zip(box.stop, case.image.shape, strict=True)]
+    region = case.image[lo[0] : hi[0], lo[1] : hi[1], lo[2] : hi[2]]
+    grids = tuple((np.arange(lo[a], hi[a]) - box.start[a]) * case.voxel_size[a] for a in range(3))
+    interpolator = sp.interpolate.RegularGridInterpolator(
+        grids,
+        region,
+        method="cubic",
+        bounds_error=False,
+        fill_value=None,
+    )
+    logger.debug("Interpolator built in %.2f s", time.perf_counter() - start)
     return interpolator
+
+
+def prepare_case(case: Case, config: DetectionConfig) -> PreparedCase:
+    """Crop the case and extract bone, as input for :func:`mspdetect.optimize.optimize`."""
+    box = crop_box(case, config.crop)
+    body = case.masks["Body"][box.slices] if "Body" in case.masks else None
+    bone = bone_image(case.image[box.slices], config.hu_range, body)
+    if not bone.any():
+        raise ValueError(
+            f"{case.case_id}: no voxels within hu_range {config.hu_range} in the cropped region",
+        )
+    R, t = array_frame(case.affine, box.start)
+    return PreparedCase(
+        bone=bone,
+        interpolator=build_interpolator(case, box, config.crop.pad),
+        voxel_size=case.voxel_size,
+        crop=box,
+        R=R,
+        t=t,
+    )
