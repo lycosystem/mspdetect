@@ -36,10 +36,22 @@ viz = [
 ]
 dev = [
     "pytest>=8.0",
+    "pytest-cov",
     "ruff>=0.12",
     "pre-commit",
     "git-cliff",
 ]
+docs = [
+    "sphinx",
+    "sphinx-book-theme",
+    "myst-parser",
+    "autodoc_pydantic",
+    "sphinxcontrib-programoutput",
+]
+
+[project.urls]
+source = "https://github.com/lycosystem/mspdetect"
+documentation = "https://mspdetect.readthedocs.io"
 
 [project.scripts]
 mspdetect = "mspdetect.cli:main"
@@ -53,6 +65,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+relative_files = true
 
 [tool.ruff]
 line-length = 100
