@@ -76,6 +76,7 @@ instance/
 
 # documentation
 docs/_build/
+docs/build/
 pdocs/
 pdoc3/
 docs/jupyter_execute

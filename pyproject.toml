@@ -40,6 +40,17 @@ dev = [
     "pre-commit",
     "git-cliff",
 ]
+docs = [
+    "sphinx",
+    "sphinx-book-theme",
+    "myst-parser",
+    "autodoc_pydantic",
+    "sphinxcontrib-programoutput",
+]
+
+[project.urls]
+source = "https://github.com/noemibuehrer/msp-detection-ct"
+documentation = "https://mspdetect.readthedocs.io"
 
 [project.scripts]
 mspdetect = "mspdetect.cli:main"
