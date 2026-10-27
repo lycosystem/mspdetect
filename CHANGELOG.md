@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-10-27
+
+### Miscellaneous Tasks
+
+- Update readme and default values.
+
 ## [0.1.0] - 2026-10-26
 
 ### Documentation
@@ -37,3 +43,4 @@ All notable changes to this project will be documented in this file.
 
 
 [0.1.0]: https://github.com/lycosystem/mspdetect/releases/tag/0.1.0
+[0.2.0]: https://github.com/lycosystem/mspdetect/releases/tag/0.1.0...0.2.0
