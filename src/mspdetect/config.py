@@ -97,11 +97,11 @@ class OptimizerConfig(_Config):
     """Grid search initialisation and optimisation of the plane."""
 
     azimuth_deg: tuple[float, float] = Field(
-        default=(0.0, 30.0),
+        default=(0.0, 10.0),
         description="Grid search over the azimuthal angle: [centre, half-width] in degrees.",
     )
     polar_deg: tuple[float, float] = Field(
-        default=(90.0, 40.0),
+        default=(90.0, 10.0),
         description="Grid search over the polar angle: [centre, half-width] in degrees.",
     )
     grid_steps: PositiveInt = Field(
