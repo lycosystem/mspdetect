@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-11-17
+
+### Features
+
+- Make metrics side agnostic: Replace distance_msp_mm and left/right_max_mm with left/right_reach_mm.
+
+### Miscellaneous Tasks
+
+- Update lockfile.
+
 ## [0.2.0] - 2026-10-27
 
 ### Miscellaneous Tasks
@@ -44,3 +54,4 @@ All notable changes to this project will be documented in this file.
 
 [0.1.0]: https://github.com/lycosystem/mspdetect/releases/tag/0.1.0
 [0.2.0]: https://github.com/lycosystem/mspdetect/releases/tag/0.1.0...0.2.0
+[0.3.0]: https://github.com/lycosystem/mspdetect/releases/tag/0.2.0...0.3.0
