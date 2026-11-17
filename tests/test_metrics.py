@@ -27,9 +27,9 @@ def test_target_crossing_midline():
     m = target_metrics(case, MIDLINE)
     assert m["side"] == "right"
     assert m["crosses_midline"]
-    assert m["distance_msp_mm"] == pytest.approx(3.0)
+    assert m["left_reach_mm"] == pytest.approx(3.0)
     assert m["lateral_extent_mm"] == pytest.approx(10.0)
-    assert (m["left_max_mm"], m["right_max_mm"]) == pytest.approx((3.0, 7.0))
+    assert (m["left_reach_mm"], m["right_reach_mm"]) == pytest.approx((3.0, 7.0))
 
 
 def test_target_not_crossing():
@@ -37,7 +37,7 @@ def test_target_not_crossing():
     m = target_metrics(case, MIDLINE)
     assert m["side"] == "left"
     assert not m["crosses_midline"]
-    assert m["distance_msp_mm"] == pytest.approx(-11.0)
+    assert m["right_reach_mm"] == pytest.approx(-11.0)
     assert m["lateral_extent_mm"] == pytest.approx(6.0)
 
 
@@ -80,7 +80,7 @@ def test_volumes_within_slices():
     volumes = (whole["Cord_left_cc"], whole["Cord_right_cc"])
     assert volumes == pytest.approx((5 * voxel_cc, 5 * voxel_cc))
     # target metrics always use the whole target
-    assert whole["GTVp_left_max_mm"] == slab["GTVp_left_max_mm"]
+    assert whole["GTVp_left_reach_mm"] == slab["GTVp_left_reach_mm"]
 
 
 def test_metrics_config_volume_region():
@@ -94,4 +94,4 @@ def test_phantom_gtv(phantom, phantom_result):
     m = target_metrics(case, phantom_result.plane)
     assert m["side"] == "left" and not m["crosses_midline"]
     voxel = max(case.voxel_size)
-    assert m["distance_msp_mm"] == pytest.approx(GTV_DISTANCE + GTV_RADIUS, abs=voxel)
+    assert m["right_reach_mm"] == pytest.approx(GTV_DISTANCE + GTV_RADIUS, abs=voxel)

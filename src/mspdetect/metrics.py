@@ -77,12 +77,9 @@ def target_metrics(case: Case, plane: Plane, structure: str = "GTVp") -> dict:
         - ``side``: ``"left"``/``"right"``: side containing the larger volume
           (``"central"`` if equal).
         - ``crosses_midline``: whether the structure has voxels on both sides.
-        - ``distance_msp_mm``: if crossing, how far the structure extends into the
-          side with the smaller volume (positive); otherwise minus the gap between
-          the plane and the closest voxel (negative).
         - ``lateral_extent_mm``: extent of the structure perpendicular to the plane.
-        - ``left_max_mm`` / ``right_max_mm``: largest distance from the plane on each
-          side (0 if no voxels on that side).
+        - ``left_reach_mm`` / ``right_reach_mm``: largest distance from the plane on each
+          side (negative if no voxels on that side).
         - ``max_diameter_mm``: largest distance between two voxels.
 
     """
@@ -99,21 +96,13 @@ def target_metrics(case: Case, plane: Plane, structure: str = "GTVp") -> dict:
         side = "central"
 
     crosses = left.size > 0 and right.size > 0
-    if crosses:
-        distance = left.max() if side in ("right", "central") else right.max()
-        extent = left.max() + right.max()
-    else:
-        on_side = left if left.size else right
-        distance = -on_side.min() if on_side.size else 0.0
-        extent = on_side.max() - on_side.min() if on_side.size else 0.0
 
     return {
         "side": side,
         "crosses_midline": bool(crosses),
-        "distance_msp_mm": float(distance),
-        "lateral_extent_mm": float(extent),
-        "left_max_mm": float(left.max()) if left.size else 0.0,
-        "right_max_mm": float(right.max()) if right.size else 0.0,
+        "lateral_extent_mm": float(d.max() - d.min()),
+        "left_reach_mm": float(-d.min()),
+        "right_reach_mm": float(d.max()),
         "max_diameter_mm": max_diameter(case, structure),
     }
 

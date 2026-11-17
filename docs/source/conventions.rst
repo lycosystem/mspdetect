@@ -78,13 +78,10 @@ The target metrics always use the whole target structure. For the ``target`` str
      - side with the larger volume (``left``, ``right``, ``central`` if equal)
    * - ``crosses_midline``
      - the structure has voxels on both sides
-   * - ``distance_msp_mm``
-     - if crossing: how far the structure extends into the side with the smaller volume (> 0);
-       otherwise minus the distance from the plane to the closest voxel (< 0)
    * - ``lateral_extent_mm``
      - extent perpendicular to the plane
-   * - ``left_max_mm``, ``right_max_mm``
-     - largest distance from the plane on each side (0 if none)
+   * - ``left_reach_mm``, ``right_reach_mm``
+     - largest distance from the plane on each side (negative if no voxels on that side)
    * - ``max_diameter_mm``
      - largest distance between two voxels of the structure
 
@@ -97,7 +94,7 @@ final quadratic loss over all starts, and ``all_starts`` computes the metrics fo
 .. code-block:: python
 
    df = pd.read_csv("metrics.csv")
-   df.groupby("case_id")["GTVp_distance_msp_mm"].agg(["min", "max", "std"])  # spread per patient
+   df.groupby("case_id")["GTVp_left_reach_mm"].agg(["min", "max", "std"])  # spread per patient
    df[df.is_first_start]  # first start only
 
 In Python: ``result.starts[i].final`` is the plane of start ``i``;
